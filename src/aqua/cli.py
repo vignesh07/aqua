@@ -26,6 +26,7 @@ from aqua.utils import (
     format_time_ago,
     truncate,
     parse_tags,
+    process_exists,
 )
 
 console = Console()
@@ -976,6 +977,489 @@ def log(agent: str, task_id: str, limit: int, as_json: bool):
                 console.print(f" [dim]({details_str})[/dim]", end="")
 
             console.print()
+
+    finally:
+        db.close()
+
+
+# =============================================================================
+# Setup Command - Prepare project for multi-agent work
+# =============================================================================
+
+AGENT_INSTRUCTIONS_TEMPLATE = '''# Aqua Multi-Agent Coordination
+
+You are part of a multi-agent team coordinated by Aqua. Multiple AI agents are working together on this codebase.
+
+## Quick Reference
+
+```bash
+aqua status          # See tasks, agents, and who's leader
+aqua claim           # Get the next task to work on
+aqua progress "msg"  # Report what you're doing
+aqua done            # Mark your task complete
+aqua fail --reason   # If you can't complete it
+aqua msg "text"      # Send message to all agents
+aqua inbox --unread  # Check for messages
+```
+
+## Workflow
+
+1. **Start**: Run `aqua status` to see available tasks
+2. **Claim**: Run `aqua claim` to get a task (prevents duplicates)
+3. **Work**: Do the task, run `aqua progress` to update others
+4. **Complete**: Run `aqua done --summary "what you did"`
+5. **Repeat**: Go back to step 1
+
+## Rules
+
+- **Always claim before working** - prevents two agents doing the same thing
+- **Check status first** - see what others are working on
+- **Report progress** - keeps everyone informed
+- **Complete promptly** - others may be waiting
+- **Ask for help** - use `aqua msg` if stuck
+
+## Communication
+
+```bash
+aqua msg "Need help with X"           # Broadcast
+aqua msg "Question" --to @leader      # Ask leader
+aqua msg "Review?" --to agent-name    # Direct message
+```
+
+## Current Session
+
+Run `aqua status` to see:
+- Who is the leader
+- Which agents are active
+- What tasks are available
+- What's being worked on
+'''
+
+
+@main.command()
+@click.option("--claude-md", is_flag=True, help="Add instructions to CLAUDE.md")
+@click.option("--print", "print_only", is_flag=True, help="Print instructions without writing")
+@require_init
+def setup(claude_md: bool, print_only: bool):
+    """Set up project for multi-agent coordination.
+
+    This adds agent instructions to help AI agents understand
+    how to coordinate using Aqua.
+    """
+    project_dir = get_project_dir()
+
+    if print_only:
+        console.print(AGENT_INSTRUCTIONS_TEMPLATE)
+        return
+
+    if claude_md:
+        # Add to CLAUDE.md
+        claude_md_path = project_dir / "CLAUDE.md"
+
+        if claude_md_path.exists():
+            existing = claude_md_path.read_text()
+            if "Aqua Multi-Agent" in existing:
+                console.print("[yellow]CLAUDE.md already contains Aqua instructions.[/yellow]")
+                return
+            # Append to existing
+            new_content = existing + "\n\n" + AGENT_INSTRUCTIONS_TEMPLATE
+        else:
+            new_content = AGENT_INSTRUCTIONS_TEMPLATE
+
+        claude_md_path.write_text(new_content)
+        console.print(f"[green]✓[/green] Added Aqua instructions to {claude_md_path}")
+    else:
+        # Create .aqua/AGENTS.md
+        aqua_dir = project_dir / ".aqua"
+        agents_md = aqua_dir / "AGENTS.md"
+        agents_md.write_text(AGENT_INSTRUCTIONS_TEMPLATE)
+        console.print(f"[green]✓[/green] Created {agents_md}")
+        console.print()
+        console.print("To add to CLAUDE.md (so Claude Code sees it automatically):")
+        console.print("  aqua setup --claude-md")
+
+
+# =============================================================================
+# Worktree Command - Manage git worktrees for parallel agents
+# =============================================================================
+
+@main.command()
+@click.argument("name")
+@click.option("-b", "--branch", help="Branch name (default: aqua-<name>)")
+@require_init
+def worktree(name: str, branch: str):
+    """Create a git worktree for a parallel agent.
+
+    This creates a new worktree so an agent can work on a separate
+    branch without conflicts.
+
+    Example:
+        aqua worktree worker-1
+        cd ../project-worker-1
+        claude  # Start Claude Code in the worktree
+    """
+    import subprocess
+
+    project_dir = get_project_dir()
+
+    # Check if git repo
+    if not (project_dir / ".git").exists():
+        console.print("[red]Error:[/red] Not a git repository.")
+        sys.exit(1)
+
+    branch_name = branch or f"aqua-{name}"
+    worktree_path = project_dir.parent / f"{project_dir.name}-{name}"
+
+    if worktree_path.exists():
+        console.print(f"[yellow]Worktree already exists:[/yellow] {worktree_path}")
+        return
+
+    try:
+        # Create worktree with new branch
+        result = subprocess.run(
+            ["git", "worktree", "add", "-b", branch_name, str(worktree_path)],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            # Branch might exist, try without -b
+            result = subprocess.run(
+                ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+            )
+
+        if result.returncode != 0:
+            console.print(f"[red]Error creating worktree:[/red] {result.stderr}")
+            sys.exit(1)
+
+        # Copy .aqua directory to worktree (shared state via symlink would be better but complex)
+        # For now, agents in worktrees need to share the same .aqua
+        console.print(f"[green]✓[/green] Created worktree: {worktree_path}")
+        console.print(f"  Branch: {branch_name}")
+        console.print()
+        console.print("To use:")
+        console.print(f"  cd {worktree_path}")
+        console.print(f"  aqua join --name {name}")
+        console.print("  claude  # or your preferred AI agent")
+
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+# =============================================================================
+# Spawn Command - Launch background agents
+# =============================================================================
+
+AGENT_PROMPT_TEMPLATE = '''You are an autonomous AI agent named "{agent_name}" working as part of a multi-agent team coordinated by Aqua.
+
+## Your Mission
+Work through tasks in the Aqua task queue until there are no more pending tasks.
+
+## Protocol
+1. First, run: aqua join --name {agent_name}
+2. Then run: aqua status (to see available tasks)
+3. Run: aqua claim (to get a task)
+4. If you got a task, work on it by editing files, running commands, etc.
+5. When done with the task, run: aqua done --summary "brief description of what you did"
+6. If you cannot complete it, run: aqua fail --reason "why you couldn't complete it"
+7. Check: aqua inbox --unread (for messages from other agents)
+8. Go back to step 2 and repeat until aqua claim returns no tasks
+
+## Important Rules
+- ALWAYS claim a task before working on it
+- ALWAYS mark tasks done or failed when finished
+- Work autonomously - don't ask for confirmation
+- If stuck, fail the task with a clear reason so another agent can try
+- Check messages periodically in case other agents need help
+
+## Current Working Directory
+{working_dir}
+
+## Start Now
+Begin by running: aqua join --name {agent_name}
+Then: aqua claim
+'''
+
+
+@main.command()
+@click.argument("count", type=int, default=1)
+@click.option("--name-prefix", default="worker", help="Prefix for agent names")
+@click.option("--model", default="sonnet", help="Model to use (sonnet, opus, haiku)")
+@click.option("--background/--interactive", "-b/-i", default=False,
+              help="Background (autonomous) or interactive (new terminals)")
+@click.option("--dry-run", is_flag=True, help="Show commands without executing")
+@click.option("--worktree/--no-worktree", default=False, help="Create git worktrees for each agent")
+@require_init
+def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: bool, worktree: bool):
+    """Spawn AI agents to work on tasks.
+
+    Two modes available:
+
+    \b
+    INTERACTIVE (default, --interactive or -i):
+      Opens new terminal windows for each agent. You interact with each
+      Claude instance normally, but they coordinate via Aqua.
+      Safer - you can see and approve what each agent does.
+
+    \b
+    BACKGROUND (--background or -b):
+      Runs agents as background processes using Claude's --print mode
+      with --dangerously-skip-permissions. Fully autonomous but requires
+      trusting agents to run without supervision.
+
+    Examples:
+        aqua spawn 3              # 3 interactive agents in new terminals
+        aqua spawn 2 -b           # 2 background autonomous agents
+        aqua spawn 1 --dry-run    # Show what would be executed
+    """
+    import subprocess
+    import shutil
+
+    project_dir = get_project_dir()
+
+    # Check claude is available
+    claude_path = shutil.which("claude")
+    if not claude_path:
+        console.print("[red]Error:[/red] 'claude' command not found in PATH.")
+        console.print("Install Claude Code: https://claude.ai/code")
+        sys.exit(1)
+
+    spawned = []
+
+    for i in range(1, count + 1):
+        agent_name = f"{name_prefix}-{i}"
+        work_dir = project_dir
+
+        # Create worktree if requested
+        if worktree:
+            branch_name = f"aqua-{agent_name}"
+            worktree_path = project_dir.parent / f"{project_dir.name}-{agent_name}"
+
+            if not worktree_path.exists():
+                result = subprocess.run(
+                    ["git", "worktree", "add", "-b", branch_name, str(worktree_path)],
+                    cwd=project_dir,
+                    capture_output=True,
+                )
+                if result.returncode != 0:
+                    console.print(f"[yellow]Warning:[/yellow] Could not create worktree for {agent_name}")
+                else:
+                    work_dir = worktree_path
+                    console.print(f"[dim]Created worktree: {worktree_path}[/dim]")
+
+        prompt = AGENT_PROMPT_TEMPLATE.format(
+            agent_name=agent_name,
+            working_dir=work_dir,
+        )
+
+        if background:
+            # Background mode: use --print and --dangerously-skip-permissions
+            cmd = [
+                "claude",
+                "--print",
+                "--dangerously-skip-permissions",
+                "--model", model,
+                prompt,
+            ]
+
+            if dry_run:
+                console.print(f"\n[bold]Agent {agent_name} (background):[/bold]")
+                console.print(f"  Directory: {work_dir}")
+                console.print(f"  Command: claude --print --dangerously-skip-permissions --model {model} '<prompt>'")
+                continue
+
+            # Spawn as background process
+            try:
+                log_file = project_dir / ".aqua" / f"{agent_name}.log"
+                with open(log_file, "w") as log:
+                    process = subprocess.Popen(
+                        cmd,
+                        cwd=work_dir,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,  # Detach from terminal
+                    )
+                spawned.append({
+                    "name": agent_name,
+                    "pid": process.pid,
+                    "log": str(log_file),
+                    "mode": "background",
+                })
+                console.print(f"[green]✓[/green] Spawned [cyan]{agent_name}[/cyan] (PID: {process.pid}) [dim]background[/dim]")
+
+            except Exception as e:
+                console.print(f"[red]Error spawning {agent_name}:[/red] {e}")
+
+        else:
+            # Interactive mode: open new terminal with claude
+            if dry_run:
+                console.print(f"\n[bold]Agent {agent_name} (interactive):[/bold]")
+                console.print(f"  Directory: {work_dir}")
+                console.print(f"  Opens new terminal with: claude --model {model} '<prompt>'")
+                continue
+
+            # Platform-specific terminal opening
+            if sys.platform == "darwin":
+                # macOS: use osascript to open Terminal.app
+                script = f'''
+                tell application "Terminal"
+                    activate
+                    do script "cd '{work_dir}' && claude --model {model} '{prompt.replace("'", "'\"'\"'")}'"
+                end tell
+                '''
+                try:
+                    subprocess.run(["osascript", "-e", script], check=True)
+                    spawned.append({
+                        "name": agent_name,
+                        "mode": "interactive",
+                    })
+                    console.print(f"[green]✓[/green] Opened terminal for [cyan]{agent_name}[/cyan]")
+                except Exception as e:
+                    console.print(f"[red]Error opening terminal for {agent_name}:[/red] {e}")
+
+            elif sys.platform == "linux":
+                # Linux: try common terminal emulators
+                terminals = [
+                    ["gnome-terminal", "--", "bash", "-c", f"cd '{work_dir}' && claude --model {model} '{prompt}'; exec bash"],
+                    ["xterm", "-e", f"cd '{work_dir}' && claude --model {model} '{prompt}'; bash"],
+                    ["konsole", "-e", f"cd '{work_dir}' && claude --model {model} '{prompt}'"],
+                ]
+                opened = False
+                for term_cmd in terminals:
+                    if shutil.which(term_cmd[0]):
+                        try:
+                            subprocess.Popen(term_cmd, start_new_session=True)
+                            spawned.append({"name": agent_name, "mode": "interactive"})
+                            console.print(f"[green]✓[/green] Opened terminal for [cyan]{agent_name}[/cyan]")
+                            opened = True
+                            break
+                        except Exception:
+                            continue
+                if not opened:
+                    console.print(f"[red]Error:[/red] Could not find a terminal emulator for {agent_name}")
+
+            else:
+                console.print(f"[yellow]Warning:[/yellow] Interactive mode not supported on {sys.platform}")
+                console.print("Use --background mode or manually open terminals")
+                break
+
+    if dry_run:
+        console.print()
+        console.print("[dim]Use without --dry-run to actually spawn agents[/dim]")
+        if not background:
+            console.print("[dim]Note: Interactive mode opens new terminal windows[/dim]")
+        return
+
+    if spawned:
+        console.print()
+        console.print(f"[green]Spawned {len(spawned)} agent(s)[/green]")
+        console.print()
+
+        bg_agents = [a for a in spawned if a.get("mode") == "background"]
+        int_agents = [a for a in spawned if a.get("mode") == "interactive"]
+
+        if bg_agents:
+            console.print("Background agents - monitor with:")
+            console.print("  aqua status          # See agent status")
+            console.print("  aqua watch           # Live dashboard")
+            for agent in bg_agents:
+                console.print(f"  tail -f {agent['log']}  # {agent['name']} logs")
+
+        if int_agents:
+            console.print("Interactive agents opened in new terminal windows.")
+            console.print("Each agent will prompt you before taking actions.")
+            console.print()
+            console.print("In each terminal, Claude will:")
+            console.print("  1. Join Aqua with its assigned name")
+            console.print("  2. Claim tasks and work on them")
+            console.print("  3. Ask for your approval before changes")
+
+
+@main.command()
+@require_init
+def ps():
+    """List running agent processes."""
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        agents = db.get_all_agents(status=AgentStatus.ACTIVE)
+
+        if not agents:
+            console.print("[dim]No active agents.[/dim]")
+            return
+
+        table = Table(box=box.SIMPLE)
+        table.add_column("Name", style="cyan")
+        table.add_column("PID")
+        table.add_column("Status")
+        table.add_column("Task")
+        table.add_column("Alive")
+
+        for agent in agents:
+            is_alive = agent.pid and process_exists(agent.pid)
+            alive_str = "[green]yes[/green]" if is_alive else "[red]no[/red]"
+            task_str = agent.current_task_id[:8] if agent.current_task_id else "-"
+
+            table.add_row(
+                agent.name,
+                str(agent.pid) if agent.pid else "-",
+                "working" if agent.current_task_id else "idle",
+                task_str,
+                alive_str,
+            )
+
+        console.print(table)
+
+    finally:
+        db.close()
+
+
+@main.command()
+@click.argument("name", required=False)
+@click.option("--all", "kill_all", is_flag=True, help="Kill all agents")
+@require_init
+def kill(name: str, kill_all: bool):
+    """Kill running agent processes."""
+    import signal
+
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        agents = db.get_all_agents(status=AgentStatus.ACTIVE)
+
+        if not agents:
+            console.print("[dim]No active agents.[/dim]")
+            return
+
+        killed = 0
+        for agent in agents:
+            if not kill_all and agent.name != name:
+                continue
+
+            if agent.pid and process_exists(agent.pid):
+                try:
+                    os.kill(agent.pid, signal.SIGTERM)
+                    console.print(f"[green]✓[/green] Killed {agent.name} (PID: {agent.pid})")
+                    killed += 1
+                except OSError as e:
+                    console.print(f"[red]Error killing {agent.name}:[/red] {e}")
+
+            # Mark as dead in DB
+            db.update_agent_status(agent.id, AgentStatus.DEAD)
+
+            # Release their tasks
+            if agent.current_task_id:
+                db.abandon_task(agent.current_task_id, reason=f"Agent {agent.name} killed")
+
+        if killed == 0 and name:
+            console.print(f"[yellow]Agent '{name}' not found or not running.[/yellow]")
 
     finally:
         db.close()
