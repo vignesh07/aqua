@@ -727,13 +727,25 @@ def progress(message: str):
 
 @main.command()
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-@require_init
 def refresh(as_json: bool):
     """Restore your identity and context after compaction.
 
     Run this FIRST at the start of every session or after context
     compaction. It tells you who you are and what you were doing.
     """
+    # Check if Aqua is initialized - don't use @require_init so we can give a helpful message
+    if not find_aqua_dir():
+        if as_json:
+            output_json({
+                "status": "not_aqua",
+                "message": "This directory is not part of an Aqua pool. No multi-agent coordination here.",
+                "aqua_enabled": False
+            })
+        else:
+            console.print("[dim]This directory is not part of an Aqua multi-agent pool.[/dim]")
+            console.print("[dim]No coordination needed - you can work independently.[/dim]")
+        return
+
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -745,11 +757,12 @@ def refresh(as_json: bool):
             if as_json:
                 output_json({
                     "status": "not_joined",
-                    "message": "You are not registered. Run 'aqua join --name <your-name>' first.",
+                    "aqua_enabled": True,
+                    "message": "Aqua is active but you haven't joined. Run 'aqua join --name <your-name>' to participate.",
                     "next_action": "aqua join --name <name>"
                 })
             else:
-                console.print("[yellow]You are not registered as an agent.[/yellow]")
+                console.print("[yellow]Aqua is active in this directory but you haven't joined.[/yellow]")
                 console.print()
                 console.print("To join the team, run:")
                 console.print("  aqua join --name <your-name>")
