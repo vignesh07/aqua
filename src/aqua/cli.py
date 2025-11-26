@@ -1288,6 +1288,68 @@ aqua spawn 3 --worktree
 - **Complete promptly** - others may be waiting
 - **Ask for help** - use `aqua msg` if stuck
 
+## Git Coordination
+
+Multiple agents working on the same repo need careful git hygiene:
+
+### Branching Strategy
+```bash
+# Each agent should work on their own branch for their task
+git checkout -b task/<task-id>-short-description
+
+# Example:
+git checkout -b task/a1b2c3-add-user-auth
+```
+
+### Before Starting Work
+```bash
+git fetch origin
+git status  # Make sure working directory is clean
+```
+
+### Committing (Commit Often!)
+```bash
+git add -A
+git commit -m "feat: description of what you did"
+```
+
+### Before Completing a Task
+```bash
+# Make sure all changes are committed
+git status
+
+# Push your branch
+git push -u origin HEAD
+```
+
+### Avoiding Conflicts
+- **Check `aqua status`** to see what files other agents are working on
+- **Don't modify files another agent is actively editing**
+- **If you need a file another agent has**, send them a message:
+  ```bash
+  aqua msg "I need to modify auth.py - are you done with it?" --to agent-name
+  ```
+- **Commit frequently** - smaller commits are easier to merge
+- **Pull before starting new task** - `git pull origin main`
+
+### If Using Worktrees (Recommended for Parallel Work)
+```bash
+# Leader spawns agents with worktrees
+aqua spawn 3 --worktree
+
+# Each agent gets their own directory and branch
+# No file conflicts possible!
+```
+
+### Merging (Usually Done by Leader or Human)
+```bash
+# After agents complete tasks, merge branches
+git checkout main
+git pull origin main
+git merge task/a1b2c3-add-user-auth
+git push origin main
+```
+
 ## Communication
 
 ```bash
