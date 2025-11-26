@@ -1216,7 +1216,63 @@ aqua msg "text"      # Send message to all agents
 aqua inbox --unread  # Check for messages
 ```
 
-## Workflow
+## If You Are Asked to Plan & Coordinate Work
+
+When the user asks you to plan a project or coordinate multi-agent work:
+
+### 1. Break Down the Work into Tasks
+
+```bash
+# Add tasks with priorities (1-10, higher = more urgent)
+aqua add "Set up project structure" -p 9
+aqua add "Implement core data models" -p 8 -d "Create User, Product, Order models"
+aqua add "Build API endpoints" -p 7 --context "REST API with FastAPI"
+aqua add "Write unit tests" -p 6 -t tests
+aqua add "Add documentation" -p 4 -t docs
+```
+
+Guidelines for task breakdown:
+- Each task should be completable by one agent in one session
+- Include clear descriptions with `-d` for complex tasks
+- Add context with `--context` for implementation details
+- Use tags `-t` to categorize (e.g., frontend, backend, tests, docs)
+- Set priorities: 9-10 blocking/critical, 7-8 important, 5-6 normal, 1-4 low
+
+### 2. Recommend Number of Agents
+
+Based on the task breakdown, recommend spawning agents:
+
+```bash
+# For small projects (3-5 tasks): 2 agents
+aqua spawn 2
+
+# For medium projects (6-15 tasks): 3-4 agents
+aqua spawn 3
+
+# For large projects (15+ tasks): 4-6 agents
+aqua spawn 5
+```
+
+Consider:
+- **Task parallelism**: How many tasks can run concurrently without conflicts?
+- **File conflicts**: Tasks touching same files should be sequential, not parallel
+- **Dependencies**: If task B needs task A done first, fewer agents may be better
+- **Complexity**: More complex tasks benefit from focused agents, not more agents
+
+### 3. Spawn Agents
+
+```bash
+# Interactive mode (recommended for first-time use) - opens new terminals
+aqua spawn 3
+
+# Background mode (autonomous, less supervision)
+aqua spawn 3 -b
+
+# With git worktrees (for file-conflict-prone work)
+aqua spawn 3 --worktree
+```
+
+## Standard Workflow (All Agents)
 
 1. **FIRST**: Run `aqua refresh` to restore your identity and context
 2. **Claim**: Run `aqua claim` to get a task (if you don't have one)

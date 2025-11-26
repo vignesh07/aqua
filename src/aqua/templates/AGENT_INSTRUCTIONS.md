@@ -1,6 +1,6 @@
 # Aqua Multi-Agent Coordination
 
-You are part of a multi-agent team coordinated by Aqua. Multiple AI agents are working together on this codebase. Follow these protocols to coordinate effectively.
+You are part of a multi-agent team coordinated by Aqua. Multiple AI agents are working together on this codebase.
 
 ## CRITICAL: First Thing Every Session
 
@@ -19,145 +19,131 @@ This tells you:
 
 **Run `aqua refresh` after every context compaction or when resuming work.**
 
-## Your Identity
-
-After running `aqua refresh`, you'll know:
-- **Agent Name**: Your unique identifier in the team
-- **Role**: Whether you're the leader or a worker
-- **Current Task**: What you should be working on
-
-## Core Protocol
-
-### 1. Starting Work (EVERY SESSION)
+## Quick Reference
 
 ```bash
-aqua refresh         # ALWAYS RUN FIRST - restores your identity and context
-aqua inbox --unread  # Check for messages from other agents
+aqua refresh         # ALWAYS RUN FIRST - shows your identity and state
+aqua status          # See all tasks, agents, and who's leader
+aqua claim           # Get the next task to work on
+aqua progress "msg"  # Report what you're doing (saves state for refresh)
+aqua done            # Mark your task complete
+aqua fail --reason   # If you can't complete it
+aqua msg "text"      # Send message to all agents
+aqua inbox --unread  # Check for messages
 ```
 
-### 2. Getting Tasks
+## If You Are Asked to Plan & Coordinate Work
+
+When the user asks you to plan a project or coordinate multi-agent work:
+
+### 1. Break Down the Work into Tasks
 
 ```bash
-aqua claim           # Claim the highest priority available task
-# Or claim a specific task:
-aqua claim <task_id>
+# Add tasks with priorities (1-10, higher = more urgent)
+aqua add "Set up project structure" -p 9
+aqua add "Implement core data models" -p 8 -d "Create User, Product, Order models"
+aqua add "Build API endpoints" -p 7 --context "REST API with FastAPI"
+aqua add "Write unit tests" -p 6 -t tests
+aqua add "Add documentation" -p 4 -t docs
 ```
 
-When you claim a task, you'll get JSON with:
-- `id`: Task identifier
-- `title`: What to do
-- `description`: Details
-- `context`: Additional context
-- `tags`: Categories
+Guidelines for task breakdown:
+- Each task should be completable by one agent in one session
+- Include clear descriptions with `-d` for complex tasks
+- Add context with `--context` for implementation details
+- Use tags `-t` to categorize (e.g., frontend, backend, tests, docs)
+- Set priorities: 9-10 blocking/critical, 7-8 important, 5-6 normal, 1-4 low
 
-### 3. While Working
+### 2. Recommend Number of Agents
 
-Report progress so other agents know what you're doing AND so you can recover after compaction:
-```bash
-aqua progress "Implementing the login form"
-aqua progress "50% done, working on validation"
-```
-
-**Important**: `aqua progress` saves your state so `aqua refresh` can restore it!
-
-### 4. Completing Tasks
+Based on the task breakdown, recommend spawning agents:
 
 ```bash
-# When done:
-aqua done --summary "Implemented login with email/password and OAuth"
+# For small projects (3-5 tasks): 2 agents
+aqua spawn 2
 
-# If you can't complete it:
-aqua fail --reason "Blocked - need database schema first"
+# For medium projects (6-15 tasks): 3-4 agents
+aqua spawn 3
+
+# For large projects (15+ tasks): 4-6 agents
+aqua spawn 5
 ```
 
-### 5. Communication
+Consider:
+- **Task parallelism**: How many tasks can run concurrently without conflicts?
+- **File conflicts**: Tasks touching same files should be sequential, not parallel
+- **Dependencies**: If task B needs task A done first, fewer agents may be better
+- **Complexity**: More complex tasks benefit from focused agents, not more agents
 
-Talk to other agents:
+### 3. Spawn Agents
+
 ```bash
-aqua msg "Need help with the auth flow"              # Broadcast to all
-aqua msg "Can you review my changes?" --to @leader  # Ask the leader
-aqua msg "Question about the API" --to agent-name   # Direct message
+# Interactive mode (recommended for first-time use) - opens new terminals
+aqua spawn 3
+
+# Background mode (autonomous, less supervision)
+aqua spawn 3 -b
+
+# With git worktrees (for file-conflict-prone work)
+aqua spawn 3 --worktree
 ```
 
-Check messages regularly:
-```bash
-aqua inbox --unread
-```
+## Standard Workflow (All Agents)
 
-## Coordination Rules
+1. **FIRST**: Run `aqua refresh` to restore your identity and context
+2. **Claim**: Run `aqua claim` to get a task (if you don't have one)
+3. **Work**: Do the task, run `aqua progress "what I'm doing"` frequently
+4. **Complete**: Run `aqua done --summary "what you did"`
+5. **Repeat**: Run `aqua refresh` then go back to step 2
 
-### DO:
+## Rules
+
 - **ALWAYS run `aqua refresh` first** - especially after context compaction
-- Check `aqua status` before starting work
-- Claim a task before working on it (prevents duplicate work)
-- Report progress frequently with `aqua progress`
-- Mark tasks done/failed promptly
-- Check inbox for messages from other agents
-- Ask for help via `aqua msg` if stuck
+- **Always claim before working** - prevents two agents doing the same thing
+- **Report progress frequently** - `aqua progress` saves your state for recovery
+- **Complete promptly** - others may be waiting
+- **Ask for help** - use `aqua msg` if stuck
 
-### DON'T:
-- Work on code without claiming a task first
-- Modify files another agent is working on (check `aqua status` to see who has what)
-- Forget to complete tasks (blocks other agents waiting on dependencies)
-- Ignore messages from other agents
-- Forget to run `aqua refresh` after context compaction
+## Communication
 
-## Task Workflow
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  1. aqua refresh     → Restore your identity (ALWAYS FIRST) │
-│  2. aqua claim       → Get a task to work on                │
-│  3. aqua progress    → Report what you're doing             │
-│  4. [DO THE WORK]    → Write code, tests, etc.              │
-│  5. aqua done        → Mark complete                        │
-│  6. GOTO 1           → Refresh and get next task            │
-└─────────────────────────────────────────────────────────────┘
+```bash
+aqua msg "Need help with X"           # Broadcast
+aqua msg "Question" --to @leader      # Ask leader
+aqua msg "Review?" --to agent-name    # Direct message
 ```
 
 ## Leader Responsibilities
 
-If you are the leader (check `aqua refresh`):
+If you are the leader (shown in `aqua refresh`):
 - You work on tasks just like everyone else
 - You can add new tasks if needed: `aqua add "Task title" -p <priority>`
-- Monitor overall progress
+- Monitor overall progress with `aqua status`
 - Help coordinate if agents are blocked
 
-## Example Session
+## Example Planning Session
 
 ```bash
-# Start of session (or after context compaction)
-$ aqua refresh
-┌───────────────────────────────────┐
-│ You are: claude-main ★ LEADER    │
-└───────────────────────────────────┘
-Agent ID: a1b2c3d4
+# User asks: "Build me a REST API for a todo app"
 
-Current Task:
-  f5e6d7c8: Implement user authentication
-  Last progress: Setting up OAuth providers
+# 1. Initialize Aqua
+aqua init
+aqua setup --claude-md
 
-  → Continue working on this task
-  → When done: aqua done --summary "what you did"
+# 2. Break down into tasks
+aqua add "Set up FastAPI project structure" -p 9 -d "Create main.py, requirements.txt, folder structure"
+aqua add "Create Todo model and database" -p 8 -d "SQLite with SQLAlchemy, Todo model with id, title, completed"
+aqua add "Implement CRUD endpoints" -p 7 -d "GET /todos, POST /todos, PUT /todos/{id}, DELETE /todos/{id}"
+aqua add "Add input validation" -p 6 -d "Pydantic models for request/response"
+aqua add "Write tests" -p 5 -t tests -d "pytest tests for all endpoints"
+aqua add "Add API documentation" -p 4 -t docs
 
-📬 2 unread message(s)
-  → Run 'aqua inbox --unread' to read them
+# 3. Recommend agents (6 tasks, some can run in parallel)
+# Tasks 1-2 are sequential (need structure before DB)
+# Tasks 3-4 can run in parallel after 1-2
+# Tasks 5-6 can run after 3-4
+# Recommend: 2-3 agents
 
-Tasks: 3 pending, 1 in progress, 5 done
-
-$ aqua inbox --unread
-codex-1: "Auth module tests are ready for review"
-gemini-2: "Can someone help with the API docs?"
-
-# Continue working...
-$ aqua progress "Finishing OAuth Google provider"
-
-# Complete the task
-$ aqua done --summary "Added OAuth with Google and GitHub providers"
-
-# Get next task
-$ aqua refresh
-$ aqua claim
+aqua spawn 2  # Interactive mode, user can watch
 ```
 
 ## When Stuck
@@ -166,10 +152,3 @@ $ aqua claim
 2. Check the task context: `aqua show <task_id>`
 3. Fail the task with reason if truly blocked: `aqua fail --reason "Need Y first"`
 4. The task will be available for another agent or can be retried later
-
----
-
-Remember:
-- **ALWAYS run `aqua refresh` first** - it restores your identity after context compaction
-- **Report progress often** - `aqua progress` saves state for recovery
-- Coordination is key. Keep other agents informed!
