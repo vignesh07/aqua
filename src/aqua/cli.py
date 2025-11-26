@@ -1259,17 +1259,44 @@ Consider:
 - **Dependencies**: If task B needs task A done first, fewer agents may be better
 - **Complexity**: More complex tasks benefit from focused agents, not more agents
 
-### 3. Spawn Agents
+### 3. Tell the User Next Steps
+
+After adding tasks, give the user clear instructions. Example:
+
+```
+I've added 6 tasks to the Aqua queue. Here's what to do next:
+
+**Option A: Spawn agents automatically (I'll open terminals for you)**
+I can run `aqua spawn 2` which will open 2 new terminal windows,
+each with a Claude agent that will automatically claim and work on tasks.
+
+**Option B: Manual setup (more control)**
+1. Open 2 new terminal windows
+2. In each terminal, navigate to this directory:
+   cd /path/to/your/project
+3. In terminal 1, run:
+   claude "Run aqua refresh, then aqua claim, and work on the task"
+4. In terminal 2, run:
+   claude "Run aqua refresh, then aqua claim, and work on the task"
+
+**Monitoring:**
+- Run `aqua status` to see progress
+- Run `aqua watch` for a live dashboard
+
+Would you like me to spawn the agents automatically, or will you set them up manually?
+```
+
+### 4. If User Wants Automatic Spawning
 
 ```bash
-# Interactive mode (recommended for first-time use) - opens new terminals
-aqua spawn 3
+# Interactive mode (recommended) - opens new terminal windows
+aqua spawn 2
 
-# Background mode (autonomous, less supervision)
-aqua spawn 3 -b
+# Background mode (fully autonomous, no supervision)
+aqua spawn 2 -b
 
-# With git worktrees (for file-conflict-prone work)
-aqua spawn 3 --worktree
+# With git worktrees (prevents file conflicts entirely)
+aqua spawn 2 --worktree
 ```
 
 ## Standard Workflow (All Agents)
