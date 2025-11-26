@@ -10,7 +10,7 @@ from typing import Optional, List, Generator, Any
 from aqua.models import Agent, Task, Message, Leader, Event, AgentStatus, TaskStatus
 
 # Schema version for migrations
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 -- Enable WAL mode for concurrent access
@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS agents (
     registered_at TEXT NOT NULL,
     current_task_id TEXT,
     capabilities TEXT,
-    metadata TEXT
+    metadata TEXT,
+    last_progress TEXT,
+    role TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
@@ -653,13 +655,45 @@ def get_db(project_dir: Path) -> Database:
     """Get database instance for a project."""
     aqua_dir = project_dir / ".aqua"
     db_path = aqua_dir / "aqua.db"
-    return Database(db_path)
+    db = Database(db_path)
+
+    # Run migrations if needed
+    _run_migrations(db)
+
+    return db
+
+
+def _run_migrations(db: Database) -> None:
+    """Run any pending database migrations."""
+    try:
+        cursor = db.conn.execute("SELECT version FROM schema_version LIMIT 1")
+        row = cursor.fetchone()
+        current_version = row["version"] if row else 0
+    except Exception:
+        # Table doesn't exist yet
+        return
+
+    # Migration from v1 to v2: add last_progress and role columns to agents
+    if current_version < 2:
+        try:
+            db.conn.execute("ALTER TABLE agents ADD COLUMN last_progress TEXT")
+        except Exception:
+            pass  # Column might already exist
+        try:
+            db.conn.execute("ALTER TABLE agents ADD COLUMN role TEXT")
+        except Exception:
+            pass  # Column might already exist
+        db.conn.execute("UPDATE schema_version SET version = 2")
 
 
 def init_db(project_dir: Path) -> Database:
     """Initialize database for a project."""
     aqua_dir = project_dir / ".aqua"
     aqua_dir.mkdir(mode=0o755, exist_ok=True)
+
+    # Create sessions directory for per-terminal agent tracking
+    sessions_dir = aqua_dir / "sessions"
+    sessions_dir.mkdir(mode=0o755, exist_ok=True)
 
     db = get_db(project_dir)
     db.init_schema()

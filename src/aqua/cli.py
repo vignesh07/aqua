@@ -31,9 +31,8 @@ from aqua.utils import (
 
 console = Console()
 
-# Environment variable for storing agent ID
+# Environment variable for storing agent ID (persists across commands in same shell)
 AQUA_AGENT_ID_VAR = "AQUA_AGENT_ID"
-AQUA_AGENT_FILE = ".aqua/agent_id"
 
 
 def get_project_dir() -> Path:
@@ -64,38 +63,77 @@ def require_init(func):
     return wrapper
 
 
+def _get_session_id() -> str:
+    """Get a unique session identifier for this terminal.
+
+    Uses multiple signals to identify a unique terminal session:
+    1. AQUA_SESSION_ID env var (set by aqua join)
+    2. Terminal TTY device
+    3. Parent process ID (the shell)
+
+    This allows multiple agents to work in the same directory.
+    """
+    # Check if we have an explicit session ID
+    session_id = os.environ.get("AQUA_SESSION_ID")
+    if session_id:
+        return session_id
+
+    # Try to get TTY - unique per terminal
+    try:
+        tty = os.ttyname(0)
+        return tty.replace("/", "_")
+    except (OSError, AttributeError):
+        pass
+
+    # Fall back to parent PID (the shell running commands)
+    return f"ppid_{os.getppid()}"
+
+
+def _get_agent_file() -> Path:
+    """Get the session-specific agent ID file path."""
+    aqua_dir = find_aqua_dir()
+    if not aqua_dir:
+        return None
+
+    sessions_dir = aqua_dir / "sessions"
+    sessions_dir.mkdir(exist_ok=True)
+
+    session_id = _get_session_id()
+    return sessions_dir / f"{session_id}.agent"
+
+
 def get_stored_agent_id() -> Optional[str]:
-    """Get agent ID from environment or file."""
-    # Check environment first
+    """Get agent ID from environment or session file.
+
+    Priority:
+    1. AQUA_AGENT_ID environment variable (explicit override)
+    2. Session-specific file in .aqua/sessions/
+    """
+    # Check environment first (highest priority)
     agent_id = os.environ.get(AQUA_AGENT_ID_VAR)
     if agent_id:
         return agent_id
 
-    # Check file
-    aqua_dir = find_aqua_dir()
-    if aqua_dir:
-        agent_file = aqua_dir / "agent_id"
-        if agent_file.exists():
-            return agent_file.read_text().strip()
+    # Check session-specific file
+    agent_file = _get_agent_file()
+    if agent_file and agent_file.exists():
+        return agent_file.read_text().strip()
 
     return None
 
 
 def store_agent_id(agent_id: str) -> None:
-    """Store agent ID to file."""
-    aqua_dir = find_aqua_dir()
-    if aqua_dir:
-        agent_file = aqua_dir / "agent_id"
+    """Store agent ID to session-specific file."""
+    agent_file = _get_agent_file()
+    if agent_file:
         agent_file.write_text(agent_id)
 
 
 def clear_agent_id() -> None:
-    """Clear stored agent ID."""
-    aqua_dir = find_aqua_dir()
-    if aqua_dir:
-        agent_file = aqua_dir / "agent_id"
-        if agent_file.exists():
-            agent_file.unlink()
+    """Clear stored agent ID for this session."""
+    agent_file = _get_agent_file()
+    if agent_file and agent_file.exists():
+        agent_file.unlink()
 
 
 def output_json(data: dict) -> None:
@@ -649,7 +687,11 @@ def fail(task_id: str, reason: str, as_json: bool):
 @click.argument("message")
 @require_init
 def progress(message: str):
-    """Report progress on current task."""
+    """Report progress on current task.
+
+    This saves your progress both to the task AND to your agent state,
+    so it can be restored after context compaction via 'aqua refresh'.
+    """
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -667,7 +709,148 @@ def progress(message: str):
         db.update_heartbeat(agent_id)
         db.update_task_progress(agent.current_task_id, message)
 
+        # Also save to agent's last_progress for refresh recovery
+        db.conn.execute(
+            "UPDATE agents SET last_progress = ? WHERE id = ?",
+            (message, agent_id)
+        )
+
         console.print(f"[green]✓[/green] Progress updated.")
+
+    finally:
+        db.close()
+
+
+# =============================================================================
+# Refresh Command - Restore agent context after compaction
+# =============================================================================
+
+@main.command()
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def refresh(as_json: bool):
+    """Restore your identity and context after compaction.
+
+    Run this FIRST at the start of every session or after context
+    compaction. It tells you who you are and what you were doing.
+    """
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        agent_id = get_stored_agent_id()
+
+        if not agent_id:
+            # Not joined yet
+            if as_json:
+                output_json({
+                    "status": "not_joined",
+                    "message": "You are not registered. Run 'aqua join --name <your-name>' first.",
+                    "next_action": "aqua join --name <name>"
+                })
+            else:
+                console.print("[yellow]You are not registered as an agent.[/yellow]")
+                console.print()
+                console.print("To join the team, run:")
+                console.print("  aqua join --name <your-name>")
+                console.print()
+                console.print("Then run 'aqua refresh' again to see your status.")
+            return
+
+        agent = db.get_agent(agent_id)
+        if not agent or agent.status != AgentStatus.ACTIVE:
+            clear_agent_id()
+            if as_json:
+                output_json({
+                    "status": "stale_session",
+                    "message": "Your previous session is no longer valid. Run 'aqua join' to rejoin.",
+                    "next_action": "aqua join --name <name>"
+                })
+            else:
+                console.print("[yellow]Your previous session is no longer valid.[/yellow]")
+                console.print("Run 'aqua join --name <your-name>' to rejoin.")
+            return
+
+        # Update heartbeat
+        db.update_heartbeat(agent_id)
+
+        # Get leader info
+        leader = db.get_leader()
+        is_leader = leader and leader.agent_id == agent_id and not leader.is_expired()
+
+        # Update role in DB
+        new_role = "leader" if is_leader else None
+        if agent.role != new_role:
+            db.conn.execute("UPDATE agents SET role = ? WHERE id = ?", (new_role, agent_id))
+
+        # Get current task if any
+        current_task = None
+        if agent.current_task_id:
+            current_task = db.get_task(agent.current_task_id)
+
+        # Get unread messages count
+        unread_messages = db.get_messages(to_agent=agent_id, unread_only=True)
+
+        # Get task counts
+        task_counts = db.get_task_counts()
+
+        if as_json:
+            output_json({
+                "status": "active",
+                "agent": {
+                    "id": agent.id,
+                    "name": agent.name,
+                    "type": agent.agent_type.value,
+                },
+                "is_leader": is_leader,
+                "current_task": current_task.to_dict() if current_task else None,
+                "last_progress": agent.last_progress,
+                "unread_messages": len(unread_messages),
+                "task_counts": task_counts,
+                "next_action": "aqua claim" if not current_task else "continue working on your task",
+            })
+            return
+
+        # Human-readable output
+        console.print()
+        console.print(Panel.fit(
+            f"[bold cyan]You are: {agent.name}[/bold cyan]" +
+            (" [yellow]★ LEADER[/yellow]" if is_leader else ""),
+            border_style="green"
+        ))
+
+        console.print(f"[dim]Agent ID: {agent.id}[/dim]")
+        console.print()
+
+        # Current task
+        if current_task:
+            console.print("[bold]Current Task:[/bold]")
+            console.print(f"  [cyan]{current_task.id[:8]}[/cyan]: {current_task.title}")
+            if current_task.description:
+                console.print(f"  [dim]{current_task.description}[/dim]")
+            if agent.last_progress:
+                console.print(f"  [bold]Last progress:[/bold] {agent.last_progress}")
+            console.print()
+            console.print("  → Continue working on this task")
+            console.print("  → When done: aqua done --summary \"what you did\"")
+        else:
+            console.print("[bold]Current Task:[/bold] None")
+            console.print()
+            console.print("  → Run 'aqua claim' to get a task")
+
+        console.print()
+
+        # Messages
+        if unread_messages:
+            console.print(f"[bold yellow]📬 {len(unread_messages)} unread message(s)[/bold yellow]")
+            console.print("  → Run 'aqua inbox --unread' to read them")
+            console.print()
+
+        # Quick status
+        pending = task_counts.get("pending", 0)
+        claimed = task_counts.get("claimed", 0)
+        done = task_counts.get("done", 0)
+        console.print(f"[dim]Tasks: {pending} pending, {claimed} in progress, {done} done[/dim]")
 
     finally:
         db.close()
@@ -990,12 +1173,30 @@ AGENT_INSTRUCTIONS_TEMPLATE = '''# Aqua Multi-Agent Coordination
 
 You are part of a multi-agent team coordinated by Aqua. Multiple AI agents are working together on this codebase.
 
+## CRITICAL: First Thing Every Session
+
+**ALWAYS run this command first, before doing anything else:**
+
+```bash
+aqua refresh
+```
+
+This tells you:
+- Your identity (name, agent ID)
+- Whether you are the leader
+- Your current task (if any)
+- What you were last working on
+- Unread messages from other agents
+
+**Run `aqua refresh` after every context compaction or when resuming work.**
+
 ## Quick Reference
 
 ```bash
-aqua status          # See tasks, agents, and who's leader
+aqua refresh         # ALWAYS RUN FIRST - shows your identity and state
+aqua status          # See all tasks, agents, and who's leader
 aqua claim           # Get the next task to work on
-aqua progress "msg"  # Report what you're doing
+aqua progress "msg"  # Report what you're doing (saves state for refresh)
 aqua done            # Mark your task complete
 aqua fail --reason   # If you can't complete it
 aqua msg "text"      # Send message to all agents
@@ -1004,17 +1205,17 @@ aqua inbox --unread  # Check for messages
 
 ## Workflow
 
-1. **Start**: Run `aqua status` to see available tasks
-2. **Claim**: Run `aqua claim` to get a task (prevents duplicates)
-3. **Work**: Do the task, run `aqua progress` to update others
+1. **FIRST**: Run `aqua refresh` to restore your identity and context
+2. **Claim**: Run `aqua claim` to get a task (if you don't have one)
+3. **Work**: Do the task, run `aqua progress "what I'm doing"` frequently
 4. **Complete**: Run `aqua done --summary "what you did"`
-5. **Repeat**: Go back to step 1
+5. **Repeat**: Run `aqua refresh` then go back to step 2
 
 ## Rules
 
+- **ALWAYS run `aqua refresh` first** - especially after context compaction
 - **Always claim before working** - prevents two agents doing the same thing
-- **Check status first** - see what others are working on
-- **Report progress** - keeps everyone informed
+- **Report progress frequently** - `aqua progress` saves your state for recovery
 - **Complete promptly** - others may be waiting
 - **Ask for help** - use `aqua msg` if stuck
 
@@ -1025,14 +1226,6 @@ aqua msg "Need help with X"           # Broadcast
 aqua msg "Question" --to @leader      # Ask leader
 aqua msg "Review?" --to agent-name    # Direct message
 ```
-
-## Current Session
-
-Run `aqua status` to see:
-- Who is the leader
-- Which agents are active
-- What tasks are available
-- What's being worked on
 '''
 
 

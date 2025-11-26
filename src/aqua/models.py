@@ -44,6 +44,8 @@ class Agent:
     current_task_id: Optional[str] = None
     capabilities: List[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    last_progress: Optional[str] = None  # Last reported progress/context
+    role: Optional[str] = None  # "leader" or None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -58,6 +60,8 @@ class Agent:
             "current_task_id": self.current_task_id,
             "capabilities": self.capabilities,
             "metadata": self.metadata,
+            "last_progress": self.last_progress,
+            "role": self.role,
         }
 
     @classmethod
@@ -74,6 +78,8 @@ class Agent:
             current_task_id=row["current_task_id"],
             capabilities=json.loads(row["capabilities"]) if row["capabilities"] else [],
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            last_progress=row.get("last_progress"),
+            role=row.get("role"),
         )
 
 
