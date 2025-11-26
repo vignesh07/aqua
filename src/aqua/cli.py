@@ -600,10 +600,45 @@ def claim(task_id: str, as_json: bool):
             task = coordinator.claim_next_task(agent_id)
 
         if not task:
+            # Check if all work is done or just nothing available right now
+            task_counts = db.get_task_counts()
+            pending = task_counts.get("pending", 0)
+            claimed = task_counts.get("claimed", 0)
+            done_count = task_counts.get("done", 0)
+            failed = task_counts.get("failed", 0)
+            total = pending + claimed + done_count + failed
+
             if as_json:
-                output_json({"error": "No task available"})
+                if pending == 0 and claimed == 0 and total > 0:
+                    output_json({
+                        "status": "all_done",
+                        "message": "All tasks are complete! Nothing left to do.",
+                        "task_counts": task_counts
+                    })
+                else:
+                    output_json({
+                        "status": "none_available",
+                        "message": "No tasks available to claim right now.",
+                        "task_counts": task_counts
+                    })
             else:
-                console.print("[yellow]No tasks available to claim.[/yellow]")
+                if pending == 0 and claimed == 0 and total > 0:
+                    console.print()
+                    console.print(Panel.fit(
+                        f"[bold green]All tasks complete![/bold green]\n\n"
+                        f"Done: {done_count}" + (f", Failed: {failed}" if failed else "") + "\n\n"
+                        f"Nothing left to do. You can:\n"
+                        f"  • Run 'aqua leave' to leave the quorum\n"
+                        f"  • Wait for the leader to add more tasks\n"
+                        f"  • Run 'aqua status' to see the summary",
+                        border_style="green"
+                    ))
+                elif total == 0:
+                    console.print("[yellow]No tasks in the queue yet.[/yellow]")
+                    console.print("[dim]Waiting for tasks to be added...[/dim]")
+                else:
+                    console.print("[yellow]No tasks available to claim right now.[/yellow]")
+                    console.print(f"[dim]({claimed} task(s) being worked on by other agents)[/dim]")
             return
 
         if as_json:
