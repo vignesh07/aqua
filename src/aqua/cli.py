@@ -791,10 +791,20 @@ def refresh(as_json: bool):
         leader = db.get_leader()
         is_leader = leader and leader.agent_id == agent_id and not leader.is_expired()
 
+        # Check if leadership changed
+        was_leader = agent.role == "leader"
+        leadership_changed = was_leader and not is_leader
+
         # Update role in DB
         new_role = "leader" if is_leader else None
         if agent.role != new_role:
             db.conn.execute("UPDATE agents SET role = ? WHERE id = ?", (new_role, agent_id))
+
+        # Get new leader info if we lost leadership
+        new_leader_name = None
+        if leadership_changed and leader:
+            new_leader_agent = db.get_agent(leader.agent_id)
+            new_leader_name = new_leader_agent.name if new_leader_agent else leader.agent_id[:8]
 
         # Get current task if any
         current_task = None
@@ -808,7 +818,7 @@ def refresh(as_json: bool):
         task_counts = db.get_task_counts()
 
         if as_json:
-            output_json({
+            result = {
                 "status": "active",
                 "agent": {
                     "id": agent.id,
@@ -816,16 +826,32 @@ def refresh(as_json: bool):
                     "type": agent.agent_type.value,
                 },
                 "is_leader": is_leader,
+                "leadership_changed": leadership_changed,
+                "new_leader": new_leader_name,
                 "current_task": current_task.to_dict() if current_task else None,
                 "last_progress": agent.last_progress,
                 "unread_messages": len(unread_messages),
                 "task_counts": task_counts,
                 "next_action": "aqua claim" if not current_task else "continue working on your task",
-            })
+            }
+            if leadership_changed:
+                result["message"] = f"You are no longer the leader. {new_leader_name} is now leading. Continue as a worker."
+            output_json(result)
             return
 
         # Human-readable output
         console.print()
+
+        # Alert if leadership changed
+        if leadership_changed:
+            console.print(Panel.fit(
+                f"[bold yellow]⚠ Leadership changed![/bold yellow]\n"
+                f"You are no longer the leader. [cyan]{new_leader_name}[/cyan] is now leading.\n"
+                f"Continue working as a regular agent.",
+                border_style="yellow"
+            ))
+            console.print()
+
         console.print(Panel.fit(
             f"[bold cyan]You are: {agent.name}[/bold cyan]" +
             (" [yellow]★ LEADER[/yellow]" if is_leader else ""),
