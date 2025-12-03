@@ -1838,23 +1838,23 @@ AGENT_MD_FILES = {
 
 
 @main.command()
-@click.option("--claude-md", is_flag=True, help="Add instructions to CLAUDE.md (Claude Code)")
-@click.option("--agents-md", is_flag=True, help="Add instructions to AGENTS.md (Codex CLI)")
-@click.option("--gemini-md", is_flag=True, help="Add instructions to GEMINI.md (Gemini CLI)")
+@click.option("--claude", is_flag=True, help="Add instructions to CLAUDE.md (Claude Code)")
+@click.option("--codex", is_flag=True, help="Add instructions to AGENTS.md (Codex CLI)")
+@click.option("--gemini", is_flag=True, help="Add instructions to GEMINI.md (Gemini CLI)")
 @click.option("--all", "all_agents", is_flag=True, help="Add instructions to all agent MD files")
 @click.option("--print", "print_only", is_flag=True, help="Print instructions without writing")
 @require_init
-def setup(claude_md: bool, agents_md: bool, gemini_md: bool, all_agents: bool, print_only: bool):
+def setup(claude: bool, codex: bool, gemini: bool, all_agents: bool, print_only: bool):
     """Set up project for multi-agent coordination.
 
     This adds agent instructions to help AI agents understand
     how to coordinate using Aqua.
 
     Examples:
-        aqua setup --claude-md    # For Claude Code
-        aqua setup --agents-md    # For Codex CLI
-        aqua setup --gemini-md    # For Gemini CLI
-        aqua setup --all          # All of the above
+        aqua setup --claude    # For Claude Code (CLAUDE.md)
+        aqua setup --codex     # For Codex CLI (AGENTS.md)
+        aqua setup --gemini    # For Gemini CLI (GEMINI.md)
+        aqua setup --all       # All of the above
     """
     project_dir = get_project_dir()
 
@@ -1867,11 +1867,11 @@ def setup(claude_md: bool, agents_md: bool, gemini_md: bool, all_agents: bool, p
     if all_agents:
         targets = list(AGENT_MD_FILES.values())
     else:
-        if claude_md:
+        if claude:
             targets.append(AGENT_MD_FILES["claude"])
-        if agents_md:
+        if codex:
             targets.append(AGENT_MD_FILES["codex"])
-        if gemini_md:
+        if gemini:
             targets.append(AGENT_MD_FILES["gemini"])
 
     if targets:
@@ -1898,10 +1898,10 @@ def setup(claude_md: bool, agents_md: bool, gemini_md: bool, all_agents: bool, p
         console.print(f"[green]✓[/green] Created {default_md}")
         console.print()
         console.print("To add to agent-specific instruction files:")
-        console.print("  aqua setup --claude-md    [dim]# For Claude Code[/dim]")
-        console.print("  aqua setup --agents-md    [dim]# For Codex CLI[/dim]")
-        console.print("  aqua setup --gemini-md    [dim]# For Gemini CLI[/dim]")
-        console.print("  aqua setup --all          [dim]# All of the above[/dim]")
+        console.print("  aqua setup --claude    [dim]# For Claude Code (CLAUDE.md)[/dim]")
+        console.print("  aqua setup --codex     [dim]# For Codex CLI (AGENTS.md)[/dim]")
+        console.print("  aqua setup --gemini    [dim]# For Gemini CLI (GEMINI.md)[/dim]")
+        console.print("  aqua setup --all       [dim]# All of the above[/dim]")
 
 
 # =============================================================================
