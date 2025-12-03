@@ -1733,14 +1733,21 @@ def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: b
             # Platform-specific terminal opening
             if sys.platform == "darwin":
                 # macOS: use osascript to open Terminal.app
+                # Write prompt to a temp file to avoid escaping nightmares
+                prompt_file = project_dir / ".aqua" / f"{agent_name}.prompt"
+                prompt_file.write_text(prompt)
+
+                # Simple shell command that reads prompt from file
+                shell_cmd = f"cd '{work_dir}' && claude --model {model} \"$(cat '{prompt_file}')\""
+
                 script = f'''
-                tell application "Terminal"
-                    activate
-                    do script "cd '{work_dir}' && claude --model {model} '{prompt.replace("'", "'\"'\"'")}'"
-                end tell
-                '''
+tell application "Terminal"
+    activate
+    do script "{shell_cmd.replace('"', '\\"')}"
+end tell
+'''
                 try:
-                    subprocess.run(["osascript", "-e", script], check=True)
+                    subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
                     spawned.append({
                         "name": agent_name,
                         "mode": "interactive",
