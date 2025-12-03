@@ -2,17 +2,36 @@
 
 [![PyPI version](https://badge.fury.io/py/aqua-coord.svg)](https://badge.fury.io/py/aqua-coord)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-A lightweight, agent-agnostic coordinator for CLI AI agents. Aqua enables multiple AI agents (Claude Code, Codex, Gemini CLI, or any CLI tool) running in separate terminal sessions to collaborate on tasks within a shared codebase.
+**Aqua** is a lightweight, agent-agnostic coordinator for CLI AI agents. It enables multiple AI agents (Claude Code, Codex CLI, Gemini CLI, or any CLI tool) running in separate terminal sessions to collaborate on tasks within a shared codebase.
+
+<!-- TODO: Add screenshot/GIF here showing aqua watch dashboard -->
+
+## Why Aqua?
+
+When working with AI coding agents, you often want multiple agents working in parallel on different tasks. But without coordination, agents can:
+- Work on the same task simultaneously
+- Edit the same files and create conflicts
+- Lack visibility into what other agents are doing
+
+Aqua solves this by providing:
+- **Shared task queue** with atomic claiming
+- **File locking** to prevent conflicts
+- **Inter-agent messaging** for coordination
+- **Live monitoring** to see all agent activity
 
 ## Features
 
+- **Task Queue**: Priority-based task management with dependencies
+- **File Locking**: Prevent multiple agents from editing the same file
+- **Blocking Messages**: Ask questions and wait for replies from other agents
+- **Live Monitoring**: Real-time dashboard and event stream
 - **Leader Election**: Automatic coordination with one agent assuming leadership
-- **Task Management**: Shared task queue with atomic claiming and priority-based scheduling
-- **Message Passing**: Inter-agent communication via broadcast or direct messages
 - **Crash Recovery**: Automatic detection of dead agents and task reassignment
-- **Agent Agnostic**: Works with any CLI agent that can execute shell commands
-- **Zero External Dependencies**: Uses SQLite (built into Python) - no Redis, Docker, or external services
+- **Agent Agnostic**: Works with Claude Code, Codex CLI, Gemini CLI, or any CLI tool
+- **Zero External Dependencies**: Uses SQLite - no Redis, Docker, or external services
+- **JSON Mode**: Full `--json` support and `AQUA_JSON=1` env var for programmatic access
 
 ## Installation
 
@@ -27,42 +46,40 @@ pip install aqua-coord
 ```bash
 cd your-project
 aqua init
+aqua setup --all  # Add instructions to CLAUDE.md, AGENTS.md, GEMINI.md
 ```
 
-### 2. Add some tasks
+### 2. Add tasks with dependencies
 
 ```bash
-aqua add "Implement user authentication"
-aqua add "Write unit tests" --priority 8
-aqua add "Update documentation" --tag docs
+aqua add "Set up project structure" -p 9
+aqua add "Implement data models" -p 8 --after "Set up project structure"
+aqua add "Build API endpoints" -p 7 --depends-on abc123
+aqua add "Write tests" -p 6 -t tests
 ```
 
-### 3. Start agents in separate terminals
+### 3. Spawn agents automatically
 
-**Terminal 1:**
 ```bash
-aqua join --name claude-main --type claude
-aqua claim
-# Work on the task...
-aqua done --summary "Implemented OAuth2 authentication"
-```
+# Open 3 new terminal windows, each with an AI agent
+aqua spawn 3
 
-**Terminal 2:**
-```bash
-aqua join --name codex-helper --type codex
-aqua claim
-# Work on the task...
-aqua done --summary "Added test coverage"
+# Or run agents in background (fully autonomous)
+aqua spawn 3 -b
+
+# Use a specific CLI (auto-detects by default)
+aqua spawn 2 --cli codex
 ```
 
 ### 4. Monitor progress
 
 ```bash
 aqua status   # Show current state
-aqua watch    # Live dashboard
+aqua watch    # Live dashboard (updates every 2s)
+aqua logs     # Tail event stream in real-time
 ```
 
-## CLI Commands
+## Complete Command Reference
 
 ### Core Commands
 
@@ -70,178 +87,191 @@ aqua watch    # Live dashboard
 |---------|-------------|
 | `aqua init` | Initialize Aqua in current directory |
 | `aqua status` | Show dashboard with agents, tasks, and leader info |
-| `aqua watch` | Live updating dashboard |
-| `aqua doctor` | Run health checks |
+| `aqua refresh` | Restore agent identity after context reset |
 
 ### Task Management
 
 | Command | Description |
 |---------|-------------|
 | `aqua add <title>` | Add a new task |
-| `aqua list` | List all tasks |
-| `aqua show <task_id>` | Show task details |
+| `aqua show [task_id]` | Show task details |
+| `aqua claim [task_id]` | Claim next pending task (or specific task) |
+| `aqua done [--summary]` | Mark current task complete |
+| `aqua fail --reason` | Mark current task as failed |
+| `aqua progress <msg>` | Report progress (saves state for refresh) |
 
-Options for `aqua add`:
-- `-d, --description` - Task description
-- `-p, --priority` - Priority 1-10 (default: 5)
-- `-t, --tag` - Add tag (repeatable)
-- `--context` - Additional context
+**Options for `aqua add`:**
+```bash
+aqua add "Title" \
+  -d "Description" \
+  -p 8 \                      # Priority 1-10 (higher = more urgent)
+  -t backend \                # Tag (repeatable)
+  --context "Use FastAPI" \   # Additional context
+  --depends-on abc123 \       # Depends on task ID (repeatable)
+  --after "Setup project"     # Depends on task by title match
+```
 
-### Agent Commands
+### Agent Management
 
 | Command | Description |
 |---------|-------------|
-| `aqua join` | Register as an agent |
+| `aqua join [-n name]` | Register as an agent |
 | `aqua leave` | Leave the quorum |
-| `aqua claim [task_id]` | Claim next task or specific task |
-| `aqua done [task_id]` | Mark task as complete |
-| `aqua fail [task_id]` | Mark task as failed |
-| `aqua progress <msg>` | Report progress on current task |
+| `aqua ps` | Show all agent processes |
+| `aqua kill [name\|--all]` | Kill agent(s) |
+| `aqua spawn <count>` | Spawn AI agents in new terminals |
 
-Options for `aqua join`:
-- `-n, --name` - Agent name (auto-generated if omitted)
-- `-t, --type` - Agent type: claude, codex, gemini, generic
+### File Locking
+
+Prevent multiple agents from editing the same file:
+
+```bash
+aqua lock src/handlers.py     # Lock a file for exclusive editing
+aqua unlock src/handlers.py   # Release a file lock
+aqua locks                    # Show all current file locks
+```
 
 ### Communication
 
-| Command | Description |
-|---------|-------------|
-| `aqua msg <message>` | Send a message |
-| `aqua inbox` | Read messages |
+```bash
+# Fire-and-forget messages
+aqua msg "Need help with auth" --to worker-2
+aqua msg "Starting deployment" --to @all
+aqua inbox --unread
 
-Options for `aqua msg`:
-- `--to` - Recipient: agent-name, @all (broadcast), @leader
+# Blocking questions (waits for reply)
+aqua ask "Should I use Redis or SQLite?" --to @leader --timeout 60
+# Other agent replies with:
+aqua reply 42 "Use SQLite, it's simpler"
+```
 
-## How It Works
-
-### Leader Election
-
-Aqua uses lease-based leader election with fencing tokens:
-
-1. First agent to join becomes leader
-2. Leader renews lease every 10 seconds (lease duration: 30 seconds)
-3. If leader's lease expires, a new leader is elected
-4. Term numbers (fencing tokens) prevent stale operations
-
-### Task Claiming
-
-Tasks are claimed atomically using SQLite transactions:
+### Monitoring
 
 ```bash
-# Claim highest priority available task
-aqua claim
-
-# Claim specific task
-aqua claim abc123
+aqua watch                    # Live dashboard (Ctrl+C to exit)
+aqua logs                     # Tail event stream (like tail -f)
+aqua logs --agent worker-1    # Filter by agent
+aqua logs --json              # Machine-readable output
+aqua log -n 50                # View last 50 events
+aqua doctor                   # Run health checks
 ```
 
-### Crash Recovery
+### Setup
 
-The leader periodically checks for crashed agents:
-
-1. Agents with heartbeats older than 60 seconds are considered potentially dead
-2. Process existence is verified via PID
-3. Dead agents are marked and their tasks released
-4. Released tasks can be reclaimed by other agents
-
-## Agent Integration
-
-Aqua works with any CLI agent through simple shell commands:
-
-### For Claude Code
-
-Add to your agent's instructions:
-
-```markdown
-## Aqua Coordination
-
-You are part of a multi-agent team coordinated by Aqua.
-
-1. Check status: `aqua status`
-2. Claim a task: `aqua claim` (returns JSON with --json flag)
-3. Report progress: `aqua progress "Working on X..."`
-4. Complete task: `aqua done --summary "What was accomplished"`
-5. Send message: `aqua msg "Need help" --to @leader`
-6. Read messages: `aqua inbox --unread`
+```bash
+aqua setup --claude           # Add instructions to CLAUDE.md
+aqua setup --codex            # Add instructions to AGENTS.md
+aqua setup --gemini           # Add instructions to GEMINI.md
+aqua setup --all              # All of the above
+aqua setup --print            # Print instructions without writing
 ```
 
-### Programmatic Integration
+## Workflow Example
+
+Here's a typical multi-agent workflow:
+
+```bash
+# 1. Initialize and add tasks
+aqua init
+aqua setup --all
+
+aqua add "Set up FastAPI project" -p 9
+aqua add "Create User model" -p 8 --after "Set up FastAPI project"
+aqua add "Build /users endpoints" -p 7 --after "Create User model"
+aqua add "Write API tests" -p 6 -t tests
+
+# 2. Spawn 2 agents
+aqua spawn 2
+
+# 3. In another terminal, monitor progress
+aqua watch
+```
+
+Each spawned agent will:
+1. Join with a unique name (worker-1, worker-2, etc.)
+2. Claim tasks respecting dependencies
+3. Lock files before editing
+4. Report progress periodically
+5. Mark tasks done when complete
+6. Claim the next available task
+
+## JSON Mode
+
+All commands support `--json` for programmatic access:
+
+```bash
+# Per-command
+aqua status --json | jq .tasks
+aqua claim --json | jq .id
+aqua doctor --json | jq .healthy
+
+# Global mode (affects all commands)
+export AQUA_JSON=1
+aqua status | jq .agents
+```
+
+## Programmatic Integration
 
 ```python
 import subprocess
 import json
 
 def aqua(args):
-    result = subprocess.run(['aqua'] + args + ['--json'], capture_output=True, text=True)
+    result = subprocess.run(
+        ['aqua'] + args + ['--json'],
+        capture_output=True, text=True
+    )
     return json.loads(result.stdout) if result.returncode == 0 else None
 
-# Join the quorum
-agent = aqua(['join', '--name', 'my-agent'])
-
-# Claim and work on tasks
+# Join and work on tasks
+agent = aqua(['join', '--name', 'my-bot'])
 while True:
     task = aqua(['claim'])
-    if task:
-        # Do work...
-        aqua(['done', '--summary', 'Completed task'])
-```
-
-## Configuration
-
-Optional `.aqua/config.yaml`:
-
-```yaml
-# Timing (all optional)
-leader_lease_seconds: 30
-heartbeat_interval_seconds: 10
-agent_dead_threshold_seconds: 60
-task_claim_timeout_seconds: 600
-
-# Behavior
-auto_recover_tasks: true
-max_task_retries: 3
-```
-
-## JSON Output
-
-All commands support `--json` flag for programmatic access:
-
-```bash
-aqua status --json | jq .leader.name
-aqua list --json | jq '.[] | select(.status == "pending")'
-aqua claim --json | jq .id
+    if not task:
+        break
+    # Do work...
+    aqua(['progress', 'Working on implementation'])
+    aqua(['done', '--summary', 'Implemented feature X'])
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Aqua CLI (aqua)                       │
-├─────────────────────────────────────────────────────────┤
-│  Commands: init, add, list, status, join, claim, ...    │
-└─────────────────────────┬───────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                      Aqua CLI (aqua)                        │
+├─────────────────────────────────────────────────────────────┤
+│  Task Queue │ File Locks │ Messages │ Agent Registry        │
+└─────────────────────────┬───────────────────────────────────┘
                           │
-┌─────────────────────────▼───────────────────────────────┐
-│                  Coordinator Core                        │
-│  • Leader Election (lease-based with fencing tokens)    │
-│  • Task Scheduler (priority-based, atomic claiming)     │
-│  • Crash Recovery (heartbeat + PID monitoring)          │
-└─────────────────────────┬───────────────────────────────┘
+┌─────────────────────────▼───────────────────────────────────┐
+│                    Coordinator Core                          │
+│  • Leader Election (lease-based with fencing tokens)        │
+│  • Task Scheduler (priority + dependencies)                 │
+│  • Crash Recovery (heartbeat + PID monitoring)              │
+└─────────────────────────┬───────────────────────────────────┘
                           │
-┌─────────────────────────▼───────────────────────────────┐
-│                 SQLite Database                          │
-│               .aqua/aqua.db (WAL mode)                  │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────▼───────────────────────────────────┐
+│                   SQLite Database                            │
+│                 .aqua/aqua.db (WAL mode)                    │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+## Supported Agent CLIs
+
+| CLI | Instruction File | Default Model |
+|-----|------------------|---------------|
+| [Claude Code](https://claude.ai/code) | `CLAUDE.md` | sonnet |
+| [Codex CLI](https://github.com/openai/codex-cli) | `AGENTS.md` | o4-mini |
+| [Gemini CLI](https://github.com/google/gemini-cli) | `GEMINI.md` | gemini-2.5-pro |
+
+Aqua auto-detects which CLI is available when using `aqua spawn`.
 
 ## Development
 
 ```bash
-# Clone the repository
+# Clone and install
 git clone https://github.com/vignesh07/aqua.git
 cd aqua
-
-# Install in development mode
 pip install -e ".[dev]"
 
 # Run tests
@@ -260,4 +290,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Contributions are welcome! Please read the [DESIGN.md](DESIGN.md) document for architecture details.
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+---
+
+**Made for the multi-agent future.**

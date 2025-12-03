@@ -1,6 +1,6 @@
 # Aqua TODO - Based on v0.1 Testing Feedback
 
-## Completed
+## Completed (v0.2.0)
 
 ### 1. ~~Fix agent ID persistence after `aqua join`~~ DONE
 - Changed from PPID-based to "default" session for AI agents without TTY
@@ -25,48 +25,47 @@
 - Supports `--agent NAME` and `--task ID` filtering
 - `--json` flag for machine-readable output
 
----
+### 6. ~~Blocking agent-to-agent messages~~ DONE
+- Added `aqua ask "question" --to agent --timeout 60`
+- Added `aqua reply <msg_id> "answer"`
+- Questions block until reply received or timeout
 
-## Lower Priority (Nice to Have)
+### 7. ~~Global JSON mode~~ DONE
+- Added `AQUA_JSON=1` env var to enable JSON output globally
+- All commands now support `--json` flag consistently
 
-### 6. Blocking agent-to-agent messages
-**Problem**: `aqua msg` is fire-and-forget; can't ask and wait for response.
-
-**Solution**:
-```bash
-aqua ask "Should I use Redis or SQLite?" --to worker-2 --wait
-# Blocks until worker-2 responds with:
-aqua reply <msg_id> "Use SQLite"
-```
-- Adds `reply_to` field to messages
-- `--wait` polls for response with timeout
+### 8. ~~Multi-CLI support~~ DONE
+- Added support for Claude Code, Codex CLI, Gemini CLI
+- `aqua setup --claude`, `--codex`, `--gemini`, `--all`
+- `aqua spawn` auto-detects available CLI or use `--cli` to specify
 
 ---
 
-### 7. Headless/JSON mode for AI agents
-**Problem**: Pretty terminal output is hard for AI agents to parse.
+## Future Ideas
 
-**Solution**:
-- Already have `--json` on most commands
-- Add `AQUA_JSON=1` env var to make JSON the default
-- Ensure ALL commands support `--json` consistently
+### Better conflict resolution
+- Automatic git merge conflict detection
+- Suggest which agent should handle conflicts
 
----
+### Web dashboard
+- Real-time web UI for monitoring
+- Task Kanban board
 
-### 8. Background agent spawning worked via Claude's Task tool
-**Note**: This actually worked! Claude spawned background agents using its own Task tool.
-Consider documenting this as the recommended approach for Claude specifically.
+### Distributed mode
+- Support for agents on different machines
+- Replace SQLite with PostgreSQL/Redis
 
 ---
 
 ## Summary
 
-| Priority | Issue | Status |
-|----------|-------|--------|
-| HIGH | Agent ID not persisting after join | DONE |
-| HIGH | `aqua spawn` AppleScript broken | DONE |
-| MED | Task dependencies | DONE |
-| MED | File locking | DONE |
-| MED | Subagent monitoring/logs | DONE |
-| LOW | Blocking messages | TODO |
-| LOW | Global JSON mode | TODO |
+| Feature | Status |
+|---------|--------|
+| Agent ID persistence | DONE |
+| `aqua spawn` AppleScript | DONE |
+| Task dependencies | DONE |
+| File locking | DONE |
+| Subagent monitoring/logs | DONE |
+| Blocking messages | DONE |
+| Global JSON mode | DONE |
+| Multi-CLI support | DONE |
