@@ -146,6 +146,11 @@ def clear_agent_id() -> None:
         agent_file.unlink()
 
 
+def is_json_mode() -> bool:
+    """Check if JSON output mode is enabled globally."""
+    return os.environ.get("AQUA_JSON", "").lower() in ("1", "true", "yes")
+
+
 def output_json(data: dict, nl: bool = False) -> None:
     """Output data as JSON.
 
@@ -157,6 +162,11 @@ def output_json(data: dict, nl: bool = False) -> None:
         click.echo(json.dumps(data, default=str))
     else:
         click.echo(json.dumps(data, indent=2, default=str))
+
+
+def should_output_json(as_json: bool) -> bool:
+    """Check if should output JSON (explicit flag or global mode)."""
+    return as_json or is_json_mode()
 
 
 # =============================================================================
@@ -564,28 +574,39 @@ def join(name: str, agent_type: str, cap: tuple, as_json: bool):
 
 @main.command()
 @click.option("--force", is_flag=True, help="Force leave even if holding tasks")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
-def leave(force: bool):
+def leave(force: bool, as_json: bool):
     """Leave the quorum."""
     project_dir = get_project_dir()
     db = get_db(project_dir)
+    as_json = should_output_json(as_json)
 
     try:
         agent_id = get_stored_agent_id()
         if not agent_id:
-            console.print("[yellow]Not currently joined.[/yellow]")
+            if as_json:
+                output_json({"status": "not_joined"})
+            else:
+                console.print("[yellow]Not currently joined.[/yellow]")
             return
 
         agent = db.get_agent(agent_id)
         if not agent:
             clear_agent_id()
-            console.print("[yellow]Agent not found, cleared local state.[/yellow]")
+            if as_json:
+                output_json({"status": "not_found", "cleared": True})
+            else:
+                console.print("[yellow]Agent not found, cleared local state.[/yellow]")
             return
 
         # Check for active tasks
         if agent.current_task_id and not force:
-            console.print(f"[red]Error:[/red] You have an active task ({agent.current_task_id}).")
-            console.print("Complete it first or use --force to abandon it.")
+            if as_json:
+                output_json({"error": "has_active_task", "task_id": agent.current_task_id})
+            else:
+                console.print(f"[red]Error:[/red] You have an active task ({agent.current_task_id}).")
+                console.print("Complete it first or use --force to abandon it.")
             sys.exit(1)
 
         # Abandon any active tasks
@@ -595,7 +616,10 @@ def leave(force: bool):
         db.delete_agent(agent_id)
         clear_agent_id()
 
-        console.print(f"[green]✓[/green] Left the quorum (was {agent.name})")
+        if as_json:
+            output_json({"status": "left", "name": agent.name, "id": agent.id})
+        else:
+            console.print(f"[green]✓[/green] Left the quorum (was {agent.name})")
 
     finally:
         db.close()
@@ -768,8 +792,9 @@ def fail(task_id: str, reason: str, as_json: bool):
 
 @main.command()
 @click.argument("message")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
-def progress(message: str):
+def progress(message: str, as_json: bool):
     """Report progress on current task.
 
     This saves your progress both to the task AND to your agent state,
@@ -777,16 +802,23 @@ def progress(message: str):
     """
     project_dir = get_project_dir()
     db = get_db(project_dir)
+    as_json = should_output_json(as_json)
 
     try:
         agent_id = get_stored_agent_id()
         if not agent_id:
-            console.print("[red]Error:[/red] Not joined. Run 'aqua join' first.")
+            if as_json:
+                output_json({"error": "not_joined"})
+            else:
+                console.print("[red]Error:[/red] Not joined. Run 'aqua join' first.")
             sys.exit(1)
 
         agent = db.get_agent(agent_id)
         if not agent or not agent.current_task_id:
-            console.print("[red]Error:[/red] No current task.")
+            if as_json:
+                output_json({"error": "no_current_task"})
+            else:
+                console.print("[red]Error:[/red] No current task.")
             sys.exit(1)
 
         db.update_heartbeat(agent_id)
@@ -798,7 +830,10 @@ def progress(message: str):
             (message, agent_id)
         )
 
-        console.print(f"[green]✓[/green] Progress updated.")
+        if as_json:
+            output_json({"status": "updated", "task_id": agent.current_task_id, "message": message})
+        else:
+            console.print(f"[green]✓[/green] Progress updated.")
 
     finally:
         db.close()
@@ -1444,44 +1479,62 @@ def watch(refresh: int):
 # =============================================================================
 
 @main.command()
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
-def doctor():
+def doctor(as_json: bool):
     """Run health checks."""
     project_dir = get_project_dir()
     db = get_db(project_dir)
+    as_json = should_output_json(as_json)
 
-    console.print("\n[bold]Aqua Health Check[/bold]")
-    console.print("─" * 40)
-
+    checks = {}
     issues = []
+
+    if not as_json:
+        console.print("\n[bold]Aqua Health Check[/bold]")
+        console.print("─" * 40)
 
     try:
         # Database check
         try:
             db.conn.execute("SELECT 1")
-            console.print("[green]✓[/green] Database accessible")
+            checks["database"] = "ok"
+            if not as_json:
+                console.print("[green]✓[/green] Database accessible")
         except Exception as e:
-            console.print(f"[red]✗[/red] Database error: {e}")
+            checks["database"] = f"error: {e}"
+            if not as_json:
+                console.print(f"[red]✗[/red] Database error: {e}")
             issues.append("database")
 
         # Schema check
         try:
             db.conn.execute("SELECT * FROM schema_version")
-            console.print("[green]✓[/green] Schema initialized")
+            checks["schema"] = "ok"
+            if not as_json:
+                console.print("[green]✓[/green] Schema initialized")
         except Exception:
-            console.print("[red]✗[/red] Schema not initialized")
+            checks["schema"] = "not_initialized"
+            if not as_json:
+                console.print("[red]✗[/red] Schema not initialized")
             issues.append("schema")
 
         # Leader check
         leader = db.get_leader()
         if leader:
             if leader.is_expired():
-                console.print("[yellow]![/yellow] Leader lease expired")
+                checks["leader"] = "expired"
+                if not as_json:
+                    console.print("[yellow]![/yellow] Leader lease expired")
                 issues.append("leader_expired")
             else:
-                console.print("[green]✓[/green] Leader elected")
+                checks["leader"] = "ok"
+                if not as_json:
+                    console.print("[green]✓[/green] Leader elected")
         else:
-            console.print("[yellow]![/yellow] No leader elected")
+            checks["leader"] = "none"
+            if not as_json:
+                console.print("[yellow]![/yellow] No leader elected")
 
         # Agent heartbeat check
         agents = db.get_all_agents(status=AgentStatus.ACTIVE)
@@ -1494,12 +1547,18 @@ def doctor():
                 stale_agents.append(agent.name)
 
         if stale_agents:
-            console.print(f"[yellow]![/yellow] Stale agents: {', '.join(stale_agents)}")
+            checks["agents"] = {"status": "stale", "stale_agents": stale_agents}
+            if not as_json:
+                console.print(f"[yellow]![/yellow] Stale agents: {', '.join(stale_agents)}")
             issues.append("stale_agents")
         elif agents:
-            console.print("[green]✓[/green] All agents have recent heartbeats")
+            checks["agents"] = {"status": "ok", "count": len(agents)}
+            if not as_json:
+                console.print("[green]✓[/green] All agents have recent heartbeats")
         else:
-            console.print("[dim]-[/dim] No active agents")
+            checks["agents"] = {"status": "none", "count": 0}
+            if not as_json:
+                console.print("[dim]-[/dim] No active agents")
 
         # Stuck tasks check
         tasks = db.get_all_tasks(status=TaskStatus.CLAIMED)
@@ -1511,18 +1570,29 @@ def doctor():
                 stuck_tasks.append(task.id[:8])
 
         if stuck_tasks:
-            console.print(f"[yellow]![/yellow] Possibly stuck tasks: {', '.join(stuck_tasks)}")
+            checks["tasks"] = {"status": "stuck", "stuck_tasks": stuck_tasks}
+            if not as_json:
+                console.print(f"[yellow]![/yellow] Possibly stuck tasks: {', '.join(stuck_tasks)}")
             issues.append("stuck_tasks")
         else:
-            console.print("[green]✓[/green] No stuck tasks")
+            checks["tasks"] = {"status": "ok"}
+            if not as_json:
+                console.print("[green]✓[/green] No stuck tasks")
 
         # Summary
-        console.print()
-        if issues:
-            console.print(f"[yellow]Overall: {len(issues)} issue(s) found[/yellow]")
+        if as_json:
+            output_json({
+                "healthy": len(issues) == 0,
+                "issues": issues,
+                "checks": checks,
+            })
         else:
-            console.print("[green]Overall: HEALTHY[/green]")
-        console.print()
+            console.print()
+            if issues:
+                console.print(f"[yellow]Overall: {len(issues)} issue(s) found[/yellow]")
+            else:
+                console.print("[green]Overall: HEALTHY[/green]")
+            console.print()
 
     finally:
         db.close()
@@ -2424,14 +2494,27 @@ end tell
 
 
 @main.command()
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
-def ps():
+def ps(as_json: bool):
     """List running agent processes."""
     project_dir = get_project_dir()
     db = get_db(project_dir)
+    as_json = should_output_json(as_json)
 
     try:
         agents = db.get_all_agents(status=AgentStatus.ACTIVE)
+
+        if as_json:
+            output_json([{
+                "name": a.name,
+                "id": a.id,
+                "pid": a.pid,
+                "status": "working" if a.current_task_id else "idle",
+                "task_id": a.current_task_id,
+                "alive": a.pid and process_exists(a.pid),
+            } for a in agents])
+            return
 
         if not agents:
             console.print("[dim]No active agents.[/dim]")
@@ -2466,22 +2549,27 @@ def ps():
 @main.command()
 @click.argument("name", required=False)
 @click.option("--all", "kill_all", is_flag=True, help="Kill all agents")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
-def kill(name: str, kill_all: bool):
+def kill(name: str, kill_all: bool, as_json: bool):
     """Kill running agent processes."""
     import signal
 
     project_dir = get_project_dir()
     db = get_db(project_dir)
+    as_json = should_output_json(as_json)
 
     try:
         agents = db.get_all_agents(status=AgentStatus.ACTIVE)
 
         if not agents:
-            console.print("[dim]No active agents.[/dim]")
+            if as_json:
+                output_json({"killed": [], "message": "no_active_agents"})
+            else:
+                console.print("[dim]No active agents.[/dim]")
             return
 
-        killed = 0
+        killed = []
         for agent in agents:
             if not kill_all and agent.name != name:
                 continue
@@ -2489,10 +2577,12 @@ def kill(name: str, kill_all: bool):
             if agent.pid and process_exists(agent.pid):
                 try:
                     os.kill(agent.pid, signal.SIGTERM)
-                    console.print(f"[green]✓[/green] Killed {agent.name} (PID: {agent.pid})")
-                    killed += 1
+                    killed.append({"name": agent.name, "pid": agent.pid})
+                    if not as_json:
+                        console.print(f"[green]✓[/green] Killed {agent.name} (PID: {agent.pid})")
                 except OSError as e:
-                    console.print(f"[red]Error killing {agent.name}:[/red] {e}")
+                    if not as_json:
+                        console.print(f"[red]Error killing {agent.name}:[/red] {e}")
 
             # Mark as dead in DB
             db.update_agent_status(agent.id, AgentStatus.DEAD)
@@ -2501,7 +2591,9 @@ def kill(name: str, kill_all: bool):
             if agent.current_task_id:
                 db.abandon_task(agent.current_task_id, reason=f"Agent {agent.name} killed")
 
-        if killed == 0 and name:
+        if as_json:
+            output_json({"killed": killed})
+        elif len(killed) == 0 and name:
             console.print(f"[yellow]Agent '{name}' not found or not running.[/yellow]")
 
     finally:
