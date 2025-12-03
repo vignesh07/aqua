@@ -65,11 +65,20 @@ aqua add "Write tests" -p 6 -t tests
 aqua spawn 3
 
 # Or run agents in background (fully autonomous)
+# ⚠️  Prompts for confirmation - agents get full permissions!
 aqua spawn 3 -b
 
 # Use a specific CLI (auto-detects by default)
-aqua spawn 2 --cli codex
+aqua spawn 2 --codex
+
+# Mix agents with round-robin assignment
+aqua spawn 4 -b --claude --codex  # 2 Claude + 2 Codex
+
+# Skip confirmation (for programmatic use or leader agents)
+aqua spawn 2 -b -y
 ```
+
+> **⚠️ Background Mode Warning**: The `-b` flag grants agents full autonomous control using dangerous flags like `--dangerously-skip-permissions` (Claude) and `--approval-mode full-auto` (Codex). Agents can read, write, and execute ANY code without asking. Use `-y` to skip the confirmation prompt.
 
 ### 4. Monitor progress
 
@@ -78,6 +87,23 @@ aqua status   # Show current state
 aqua watch    # Live dashboard (updates every 2s)
 aqua logs     # Tail event stream in real-time
 ```
+
+### Alternative: Let the Agent Do It
+
+After running `aqua setup --all`, you can simply start your AI agent and ask it to plan the project:
+
+```bash
+aqua init
+aqua setup --all
+
+# Start your AI agent (Claude Code, Codex, Gemini)
+claude  # or: codex, gemini
+
+# Then ask:
+> "Plan this project and spawn workers to build it"
+```
+
+The agent reads the instructions from CLAUDE.md (or AGENTS.md/GEMINI.md), understands Aqua's capabilities, and handles task breakdown, agent spawning, and coordination autonomously.
 
 ## Complete Command Reference
 
@@ -256,15 +282,15 @@ while True:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Supported Agent CLIs
+## Supported Agents
 
-| CLI | Instruction File | Default Model |
-|-----|------------------|---------------|
-| [Claude Code](https://claude.ai/code) | `CLAUDE.md` | sonnet |
-| [Codex CLI](https://github.com/openai/codex-cli) | `AGENTS.md` | o4-mini |
-| [Gemini CLI](https://github.com/google/gemini-cli) | `GEMINI.md` | gemini-2.5-pro |
+| CLI | Instruction File |
+|-----|------------------|
+| [Claude Code](https://claude.ai/code) | `CLAUDE.md` |
+| [Codex CLI](https://github.com/openai/codex-cli) | `AGENTS.md` |
+| [Gemini CLI](https://github.com/google/gemini-cli) | `GEMINI.md` |
 
-Aqua auto-detects which CLI is available when using `aqua spawn`.
+Aqua auto-detects which CLI is available when using `aqua spawn`. Each CLI uses its own default model - override with `--model` if needed.
 
 ## Development
 

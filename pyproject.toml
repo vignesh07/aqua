@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aqua-coord"
-version = "0.1.0"
+version = "0.2.3"
 description = "Autonomous QUorum of Agents - Lightweight coordinator for CLI AI agents"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Vignesh", email = "vignesh@example.com" }
+    { name = "Vignesh", email = "mailvgnsh@gmail.com" }
 ]
 keywords = [
     "ai",

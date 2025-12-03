@@ -1,16 +1,15 @@
 """Coordinator logic for task management and crash recovery."""
 
 from datetime import datetime, timedelta
-from typing import Optional, List
 
 from aqua.db import Database
-from aqua.models import Agent, Task, AgentStatus, TaskStatus
+from aqua.models import Agent, AgentStatus, Task, TaskStatus
 from aqua.utils import process_exists
 
-
 # Configuration defaults
-AGENT_DEAD_THRESHOLD_SECONDS = 60
-TASK_CLAIM_TIMEOUT_SECONDS = 600  # 10 minutes
+# 5 minutes - LLM operations can take several minutes
+AGENT_DEAD_THRESHOLD_SECONDS = 300
+TASK_CLAIM_TIMEOUT_SECONDS = 1800  # 30 minutes for complex tasks
 
 
 class Coordinator:
@@ -26,7 +25,7 @@ class Coordinator:
         self.dead_threshold = timedelta(seconds=dead_threshold)
         self.claim_timeout = timedelta(seconds=claim_timeout)
 
-    def claim_next_task(self, agent_id: str) -> Optional[Task]:
+    def claim_next_task(self, agent_id: str) -> Task | None:
         """
         Claim the next available task for an agent.
         Returns the claimed task or None if no tasks available.
@@ -48,7 +47,7 @@ class Coordinator:
 
         return None
 
-    def claim_specific_task(self, agent_id: str, task_id: str) -> Optional[Task]:
+    def claim_specific_task(self, agent_id: str, task_id: str) -> Task | None:
         """
         Claim a specific task for an agent.
         Returns the claimed task or None if claim failed.
@@ -62,7 +61,7 @@ class Coordinator:
         return None
 
     def complete_task(
-        self, agent_id: str, task_id: Optional[str] = None, result: Optional[str] = None
+        self, agent_id: str, task_id: str | None = None, result: str | None = None
     ) -> bool:
         """
         Complete a task.
@@ -80,7 +79,7 @@ class Coordinator:
         return False
 
     def fail_task(
-        self, agent_id: str, task_id: Optional[str] = None, error: str = "Task failed"
+        self, agent_id: str, task_id: str | None = None, error: str = "Task failed"
     ) -> bool:
         """
         Mark a task as failed.
@@ -97,7 +96,7 @@ class Coordinator:
             return True
         return False
 
-    def recover_dead_agents(self) -> List[str]:
+    def recover_dead_agents(self) -> list[str]:
         """
         Detect crashed agents and release their tasks.
         Returns list of recovered agent IDs.

@@ -2,12 +2,13 @@
 
 import json
 import sqlite3
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Generator, Any
+from typing import Any
 
-from aqua.models import Agent, Task, Message, Leader, Event, AgentStatus, TaskStatus
+from aqua.models import Agent, AgentStatus, Event, Leader, Message, Task, TaskStatus
 
 # Schema version for migrations
 SCHEMA_VERSION = 4
@@ -124,7 +125,7 @@ class Database:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create database connection."""
@@ -202,7 +203,7 @@ class Database:
         self.log_event("agent_joined", agent_id=agent.id, details={"name": agent.name})
         return agent
 
-    def get_agent(self, agent_id: str) -> Optional[Agent]:
+    def get_agent(self, agent_id: str) -> Agent | None:
         """Get an agent by ID."""
         cursor = self.conn.execute(
             "SELECT * FROM agents WHERE id = ?", (agent_id,)
@@ -210,7 +211,7 @@ class Database:
         row = cursor.fetchone()
         return Agent.from_row(dict(row)) if row else None
 
-    def get_agent_by_name(self, name: str) -> Optional[Agent]:
+    def get_agent_by_name(self, name: str) -> Agent | None:
         """Get an agent by name."""
         cursor = self.conn.execute(
             "SELECT * FROM agents WHERE name = ?", (name,)
@@ -218,7 +219,7 @@ class Database:
         row = cursor.fetchone()
         return Agent.from_row(dict(row)) if row else None
 
-    def get_all_agents(self, status: Optional[AgentStatus] = None) -> List[Agent]:
+    def get_all_agents(self, status: AgentStatus | None = None) -> list[Agent]:
         """Get all agents, optionally filtered by status."""
         if status:
             cursor = self.conn.execute(
@@ -244,7 +245,7 @@ class Database:
             (status.value, agent_id)
         )
 
-    def update_agent_task(self, agent_id: str, task_id: Optional[str]) -> None:
+    def update_agent_task(self, agent_id: str, task_id: str | None) -> None:
         """Update an agent's current task."""
         self.conn.execute(
             "UPDATE agents SET current_task_id = ? WHERE id = ?",
@@ -297,7 +298,7 @@ class Database:
         self.log_event("task_created", task_id=task.id, details={"title": task.title})
         return task
 
-    def get_task(self, task_id: str) -> Optional[Task]:
+    def get_task(self, task_id: str) -> Task | None:
         """Get a task by ID."""
         cursor = self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
         row = cursor.fetchone()
@@ -305,13 +306,13 @@ class Database:
 
     def get_all_tasks(
         self,
-        status: Optional[TaskStatus] = None,
-        claimed_by: Optional[str] = None,
-        tag: Optional[str] = None,
-    ) -> List[Task]:
+        status: TaskStatus | None = None,
+        claimed_by: str | None = None,
+        tag: str | None = None,
+    ) -> list[Task]:
         """Get all tasks with optional filters."""
         query = "SELECT * FROM tasks WHERE 1=1"
-        params: List[Any] = []
+        params: list[Any] = []
 
         if status:
             query += " AND status = ?"
@@ -328,7 +329,7 @@ class Database:
         cursor = self.conn.execute(query, params)
         return [Task.from_row(dict(row)) for row in cursor.fetchall()]
 
-    def get_next_pending_task(self) -> Optional[Task]:
+    def get_next_pending_task(self) -> Task | None:
         """Get the next pending task (highest priority, oldest) with met dependencies."""
         # Get all pending tasks ordered by priority
         cursor = self.conn.execute(
@@ -358,7 +359,7 @@ class Database:
                 return False
         return True
 
-    def get_blocking_dependencies(self, task: Task) -> List[Task]:
+    def get_blocking_dependencies(self, task: Task) -> list[Task]:
         """Get list of dependencies that are not yet complete."""
         blocking = []
         for dep_id in task.depends_on:
@@ -387,7 +388,7 @@ class Database:
         return False
 
     def complete_task(
-        self, task_id: str, agent_id: str, result: Optional[str] = None
+        self, task_id: str, agent_id: str, result: str | None = None
     ) -> bool:
         """Mark a task as completed."""
         now = datetime.utcnow().isoformat()
@@ -490,7 +491,7 @@ class Database:
     # Leader Operations
     # =========================================================================
 
-    def get_leader(self) -> Optional[Leader]:
+    def get_leader(self) -> Leader | None:
         """Get the current leader."""
         cursor = self.conn.execute("SELECT * FROM leader WHERE id = 1")
         row = cursor.fetchone()
@@ -579,9 +580,9 @@ class Database:
         self,
         from_agent: str,
         content: str,
-        to_agent: Optional[str] = None,
+        to_agent: str | None = None,
         message_type: str = "chat",
-        reply_to: Optional[int] = None,
+        reply_to: int | None = None,
     ) -> Message:
         """Create a new message."""
         now = datetime.utcnow().isoformat()
@@ -604,13 +605,13 @@ class Database:
             reply_to=reply_to,
         )
 
-    def get_message(self, message_id: int) -> Optional[Message]:
+    def get_message(self, message_id: int) -> Message | None:
         """Get a message by ID."""
         cursor = self.conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
         row = cursor.fetchone()
         return Message.from_row(dict(row)) if row else None
 
-    def get_replies(self, message_id: int) -> List[Message]:
+    def get_replies(self, message_id: int) -> list[Message]:
         """Get all replies to a message."""
         cursor = self.conn.execute(
             "SELECT * FROM messages WHERE reply_to = ? ORDER BY created_at ASC",
@@ -620,13 +621,13 @@ class Database:
 
     def get_messages(
         self,
-        to_agent: Optional[str] = None,
+        to_agent: str | None = None,
         unread_only: bool = False,
         limit: int = 50,
-    ) -> List[Message]:
+    ) -> list[Message]:
         """Get messages for an agent."""
         query = "SELECT * FROM messages WHERE 1=1"
-        params: List[Any] = []
+        params: list[Any] = []
 
         if to_agent:
             # Get messages to this agent OR broadcasts
@@ -642,7 +643,7 @@ class Database:
         cursor = self.conn.execute(query, params)
         return [Message.from_row(dict(row)) for row in cursor.fetchall()]
 
-    def mark_messages_read(self, agent_id: str, message_ids: List[int]) -> int:
+    def mark_messages_read(self, agent_id: str, message_ids: list[int]) -> int:
         """Mark messages as read."""
         if not message_ids:
             return 0
@@ -664,9 +665,9 @@ class Database:
     def log_event(
         self,
         event_type: str,
-        agent_id: Optional[str] = None,
-        task_id: Optional[str] = None,
-        details: Optional[dict] = None,
+        agent_id: str | None = None,
+        task_id: str | None = None,
+        details: dict | None = None,
     ) -> None:
         """Log an event."""
         now = datetime.utcnow().isoformat()
@@ -680,14 +681,14 @@ class Database:
 
     def get_events(
         self,
-        event_type: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        task_id: Optional[str] = None,
+        event_type: str | None = None,
+        agent_id: str | None = None,
+        task_id: str | None = None,
         limit: int = 100,
-    ) -> List[Event]:
+    ) -> list[Event]:
         """Get events with optional filters."""
         query = "SELECT * FROM events WHERE 1=1"
-        params: List[Any] = []
+        params: list[Any] = []
 
         if event_type:
             query += " AND event_type = ?"
@@ -737,7 +738,7 @@ class Database:
             return True
         return False
 
-    def get_file_lock(self, file_path: str) -> Optional[dict]:
+    def get_file_lock(self, file_path: str) -> dict | None:
         """Get lock info for a file."""
         cursor = self.conn.execute(
             "SELECT * FROM file_locks WHERE file_path = ?",
@@ -748,13 +749,13 @@ class Database:
             return {"file_path": row["file_path"], "agent_id": row["agent_id"], "locked_at": row["locked_at"]}
         return None
 
-    def get_all_locks(self) -> List[dict]:
+    def get_all_locks(self) -> list[dict]:
         """Get all file locks."""
         cursor = self.conn.execute("SELECT * FROM file_locks ORDER BY locked_at DESC")
         return [{"file_path": row["file_path"], "agent_id": row["agent_id"], "locked_at": row["locked_at"]}
                 for row in cursor.fetchall()]
 
-    def get_agent_locks(self, agent_id: str) -> List[dict]:
+    def get_agent_locks(self, agent_id: str) -> list[dict]:
         """Get all files locked by an agent."""
         cursor = self.conn.execute(
             "SELECT * FROM file_locks WHERE agent_id = ? ORDER BY locked_at DESC",

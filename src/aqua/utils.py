@@ -4,7 +4,6 @@ import os
 import random
 import uuid
 from datetime import datetime
-from typing import Optional
 
 # Adjectives and nouns for generating memorable agent names
 ADJECTIVES = [
@@ -87,7 +86,7 @@ def truncate(text: str, max_length: int = 50, suffix: str = "...") -> str:
     return text[:max_length - len(suffix)] + suffix
 
 
-def parse_tags(tags_str: Optional[str]) -> list:
+def parse_tags(tags_str: str | None) -> list:
     """Parse comma-separated tags string into list."""
     if not tags_str:
         return []

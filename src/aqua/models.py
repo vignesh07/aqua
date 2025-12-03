@@ -1,10 +1,9 @@
 """Data models for Aqua."""
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, List, Any
-import json
 
 
 class AgentStatus(Enum):
@@ -37,15 +36,15 @@ class Agent:
     id: str
     name: str
     agent_type: AgentType = AgentType.GENERIC
-    pid: Optional[int] = None
+    pid: int | None = None
     status: AgentStatus = AgentStatus.ACTIVE
     last_heartbeat_at: datetime = field(default_factory=datetime.utcnow)
     registered_at: datetime = field(default_factory=datetime.utcnow)
-    current_task_id: Optional[str] = None
-    capabilities: List[str] = field(default_factory=list)
+    current_task_id: str | None = None
+    capabilities: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
-    last_progress: Optional[str] = None  # Last reported progress/context
-    role: Optional[str] = None  # "leader" or None
+    last_progress: str | None = None  # Last reported progress/context
+    role: str | None = None  # "leader" or None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -88,24 +87,24 @@ class Task:
     """A work item to be claimed and executed."""
     id: str
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     status: TaskStatus = TaskStatus.PENDING
     priority: int = 5
-    created_by: Optional[str] = None
-    claimed_by: Optional[str] = None
-    claim_term: Optional[int] = None
+    created_by: str | None = None
+    claimed_by: str | None = None
+    claim_term: int | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    claimed_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    result: Optional[str] = None
-    error: Optional[str] = None
+    claimed_at: datetime | None = None
+    completed_at: datetime | None = None
+    result: str | None = None
+    error: str | None = None
     retry_count: int = 0
     max_retries: int = 3
-    tags: List[str] = field(default_factory=list)
-    context: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
+    context: str | None = None
     version: int = 1
-    depends_on: List[str] = field(default_factory=list)  # List of task IDs
+    depends_on: list[str] = field(default_factory=list)  # List of task IDs
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -164,12 +163,12 @@ class Message:
     """A message between agents."""
     id: int
     from_agent: str
-    to_agent: Optional[str]  # None = broadcast
+    to_agent: str | None  # None = broadcast
     content: str
     message_type: str = "chat"  # "chat", "question", "answer"
     created_at: datetime = field(default_factory=datetime.utcnow)
-    read_at: Optional[datetime] = None
-    reply_to: Optional[int] = None  # ID of message this is replying to
+    read_at: datetime | None = None
+    reply_to: int | None = None  # ID of message this is replying to
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -237,8 +236,8 @@ class Event:
     id: int
     timestamp: datetime
     event_type: str
-    agent_id: Optional[str]
-    task_id: Optional[str]
+    agent_id: str | None
+    task_id: str | None
     details: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

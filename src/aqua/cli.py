@@ -6,27 +6,24 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import click
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
 from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from aqua import __version__
-from aqua.db import Database, init_db, get_db
-from aqua.models import Agent, Task, AgentStatus, AgentType, TaskStatus
 from aqua.coordinator import Coordinator
+from aqua.db import get_db, init_db
+from aqua.models import Agent, AgentStatus, AgentType, Task, TaskStatus
 from aqua.utils import (
-    generate_short_id,
-    generate_agent_name,
-    get_current_pid,
     format_time_ago,
-    truncate,
-    parse_tags,
+    generate_agent_name,
+    generate_short_id,
+    get_current_pid,
     process_exists,
+    truncate,
 )
 
 console = Console()
@@ -45,7 +42,7 @@ def get_project_dir() -> Path:
     return cwd
 
 
-def find_aqua_dir() -> Optional[Path]:
+def find_aqua_dir() -> Path | None:
     """Find the .aqua directory."""
     project = get_project_dir()
     aqua_dir = project / ".aqua"
@@ -112,7 +109,7 @@ def _get_agent_file() -> Path:
     return sessions_dir / f"{session_id}.agent"
 
 
-def get_stored_agent_id() -> Optional[str]:
+def get_stored_agent_id() -> str | None:
     """Get agent ID from environment or session file.
 
     Priority:
@@ -133,10 +130,21 @@ def get_stored_agent_id() -> Optional[str]:
 
 
 def store_agent_id(agent_id: str) -> None:
-    """Store agent ID to session-specific file."""
+    """Store agent ID to session-specific file.
+
+    Also stores to default.agent for IDE compatibility - IDEs often spawn
+    fresh processes that don't inherit env vars, so they fall back to default.
+    """
     agent_file = _get_agent_file()
     if agent_file:
         agent_file.write_text(agent_id)
+
+        # Also write to default.agent for IDE compatibility
+        # This ensures subsequent commands from the same IDE find the agent
+        aqua_dir = find_aqua_dir()
+        if aqua_dir:
+            default_file = aqua_dir / "sessions" / "default.agent"
+            default_file.write_text(agent_id)
 
 
 def clear_agent_id() -> None:
@@ -523,7 +531,27 @@ def join(name: str, agent_type: str, cap: tuple, as_json: bool):
     db = get_db(project_dir)
 
     try:
-        # Check if already joined
+        # Generate unique name if not provided
+        if not name:
+            # Keep generating until we find a unique name
+            for _ in range(100):  # Avoid infinite loop
+                candidate = generate_agent_name()
+                if not db.get_agent_by_name(candidate):
+                    name = candidate
+                    break
+            else:
+                # Fallback: add random suffix
+                name = f"{generate_agent_name()}-{generate_short_id()[:4]}"
+
+        # CRITICAL: Set session ID to agent name BEFORE checking existing
+        # This ensures each agent gets its own session file, preventing
+        # multiple agents from sharing the same "default" session
+        current_session = _get_session_id()
+        if current_session == "default":
+            # Running without TTY (typical for AI agents) - use agent name as session
+            os.environ["AQUA_SESSION_ID"] = name
+
+        # Check if already joined (now using the correct session file)
         existing_id = get_stored_agent_id()
         if existing_id:
             existing = db.get_agent(existing_id)
@@ -534,11 +562,7 @@ def join(name: str, agent_type: str, cap: tuple, as_json: bool):
                     console.print(f"[yellow]Already joined as {existing.name}[/yellow]")
                 return
 
-        # Generate name if not provided
-        if not name:
-            name = generate_agent_name()
-
-        # Check name uniqueness
+        # Check name uniqueness (for user-provided names)
         if db.get_agent_by_name(name):
             console.print(f"[red]Error:[/red] Agent name '{name}' already taken.")
             sys.exit(1)
@@ -566,7 +590,6 @@ def join(name: str, agent_type: str, cap: tuple, as_json: bool):
             leader_str = " [bold yellow](leader)[/bold yellow]" if is_leader else ""
             console.print(f"[green]✓[/green] Joined as [cyan]{name}[/cyan]{leader_str}")
             console.print(f"  Agent ID: {agent.id}")
-            console.print(f"  Set AQUA_AGENT_ID={agent.id} to use in other terminals")
 
     finally:
         db.close()
@@ -649,6 +672,16 @@ def claim(task_id: str, as_json: bool):
         # Update heartbeat
         db.update_heartbeat(agent_id)
 
+        # Run recovery to reclaim orphaned tasks from dead agents
+        coordinator = Coordinator(db)
+        recovery = coordinator.run_recovery()
+        if recovery["dead_agents"] or recovery["stale_tasks"]:
+            if not should_output_json(as_json):
+                if recovery["dead_agents"]:
+                    console.print(f"[dim]Recovered {len(recovery['dead_agents'])} dead agent(s)[/dim]")
+                if recovery["stale_tasks"]:
+                    console.print(f"[dim]Recovered {recovery['stale_tasks']} stale task(s)[/dim]")
+
         # Check if already has a task
         if agent.current_task_id:
             task = db.get_task(agent.current_task_id)
@@ -658,8 +691,6 @@ def claim(task_id: str, as_json: bool):
                 else:
                     console.print(f"[yellow]Already working on task {task.id}:[/yellow] {task.title}")
                 return
-
-        coordinator = Coordinator(db)
 
         if task_id:
             task = coordinator.claim_specific_task(agent_id, task_id)
@@ -694,10 +725,10 @@ def claim(task_id: str, as_json: bool):
                     console.print(Panel.fit(
                         f"[bold green]All tasks complete![/bold green]\n\n"
                         f"Done: {done_count}" + (f", Failed: {failed}" if failed else "") + "\n\n"
-                        f"Nothing left to do. You can:\n"
-                        f"  • Run 'aqua leave' to leave the quorum\n"
-                        f"  • Wait for the leader to add more tasks\n"
-                        f"  • Run 'aqua status' to see the summary",
+                        "Nothing left to do. You can:\n"
+                        "  • Run 'aqua leave' to leave the quorum\n"
+                        "  • Wait for the leader to add more tasks\n"
+                        "  • Run 'aqua status' to see the summary",
                         border_style="green"
                     ))
                 elif total == 0:
@@ -742,7 +773,7 @@ def done(task_id: str, summary: str, as_json: bool):
             if as_json:
                 output_json({"success": True, "task_id": task_id})
             else:
-                console.print(f"[green]✓[/green] Task completed!")
+                console.print("[green]✓[/green] Task completed!")
         else:
             if as_json:
                 output_json({"error": "Failed to complete task"})
@@ -778,7 +809,7 @@ def fail(task_id: str, reason: str, as_json: bool):
             if as_json:
                 output_json({"success": True, "task_id": task_id})
             else:
-                console.print(f"[yellow]Task marked as failed.[/yellow]")
+                console.print("[yellow]Task marked as failed.[/yellow]")
         else:
             if as_json:
                 output_json({"error": "Failed to mark task as failed"})
@@ -833,7 +864,7 @@ def progress(message: str, as_json: bool):
         if as_json:
             output_json({"status": "updated", "task_id": agent.current_task_id, "message": message})
         else:
-            console.print(f"[green]✓[/green] Progress updated.")
+            console.print("[green]✓[/green] Progress updated.")
 
     finally:
         db.close()
@@ -1137,7 +1168,7 @@ def ask(question: str, to_agent: str, timeout: int, poll: int, as_json: bool):
     db = get_db(project_dir)
 
     try:
-        agent_id = get_current_agent_id()
+        agent_id = get_stored_agent_id()
         if not agent_id:
             console.print("[red]Error:[/red] Not joined. Run 'aqua join' first.")
             sys.exit(1)
@@ -1226,7 +1257,7 @@ def reply(message_id: int, response: str, as_json: bool):
     db = get_db(project_dir)
 
     try:
-        agent_id = get_current_agent_id()
+        agent_id = get_stored_agent_id()
         if not agent_id:
             console.print("[red]Error:[/red] Not joined. Run 'aqua join' first.")
             sys.exit(1)
@@ -1298,7 +1329,7 @@ def lock(file_path: str, as_json: bool):
                 if as_json:
                     output_json({"success": True, "message": "You already have this file locked"})
                 else:
-                    console.print(f"[yellow]You already have this file locked.[/yellow]")
+                    console.print("[yellow]You already have this file locked.[/yellow]")
             else:
                 if as_json:
                     output_json({"success": False, "locked_by": locker_name})
@@ -1418,15 +1449,19 @@ def locks(as_json: bool):
 @require_init
 def watch(refresh: int):
     """Live dashboard (Ctrl+C to exit)."""
-    from rich.live import Live
-    from rich.layout import Layout
     import time
+
+    from rich.live import Live
 
     project_dir = get_project_dir()
 
     def generate_dashboard() -> Table:
         db = get_db(project_dir)
         try:
+            # Run recovery on each refresh to detect dead agents
+            coordinator = Coordinator(db)
+            coordinator.run_recovery()
+
             agents = db.get_all_agents(status=AgentStatus.ACTIVE)
             leader = db.get_leader()
             tasks = db.get_all_tasks()
@@ -1480,9 +1515,10 @@ def watch(refresh: int):
 
 @main.command()
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.option("--fix", is_flag=True, help="Attempt to fix issues (recover dead agents, stale tasks)")
 @require_init
-def doctor(as_json: bool):
-    """Run health checks."""
+def doctor(as_json: bool, fix: bool):
+    """Run health checks and optionally fix issues."""
     project_dir = get_project_dir()
     db = get_db(project_dir)
     as_json = should_output_json(as_json)
@@ -1579,6 +1615,31 @@ def doctor(as_json: bool):
             if not as_json:
                 console.print("[green]✓[/green] No stuck tasks")
 
+        # Run fix if requested
+        if fix and issues:
+            if not as_json:
+                console.print()
+                console.print("[bold]Running recovery...[/bold]")
+
+            coordinator = Coordinator(db)
+            recovery = coordinator.run_recovery()
+
+            checks["recovery"] = {
+                "dead_agents_recovered": len(recovery["dead_agents"]),
+                "stale_tasks_recovered": recovery["stale_tasks"],
+                "tasks_requeued": recovery["requeued_tasks"],
+            }
+
+            if not as_json:
+                if recovery["dead_agents"]:
+                    console.print(f"[green]✓[/green] Recovered {len(recovery['dead_agents'])} dead agent(s)")
+                if recovery["stale_tasks"]:
+                    console.print(f"[green]✓[/green] Recovered {recovery['stale_tasks']} stale task(s)")
+                if recovery["requeued_tasks"]:
+                    console.print(f"[green]✓[/green] Requeued {recovery['requeued_tasks']} task(s)")
+                if not any([recovery["dead_agents"], recovery["stale_tasks"], recovery["requeued_tasks"]]):
+                    console.print("[dim]No automatic fixes needed[/dim]")
+
         # Summary
         if as_json:
             output_json({
@@ -1593,6 +1654,63 @@ def doctor(as_json: bool):
             else:
                 console.print("[green]Overall: HEALTHY[/green]")
             console.print()
+
+    finally:
+        db.close()
+
+
+# =============================================================================
+# Recover Command
+# =============================================================================
+
+@main.command()
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def recover(as_json: bool):
+    """Recover dead agents and orphaned tasks.
+
+    This command detects agents that have stopped heartbeating and:
+    - Marks them as dead
+    - Releases their claimed tasks back to PENDING
+    - Requeues any abandoned tasks
+
+    Recovery also runs automatically when:
+    - Any agent calls 'aqua claim'
+    - The 'aqua watch' dashboard is running
+    - You run 'aqua doctor --fix'
+    """
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+    as_json = should_output_json(as_json)
+
+    try:
+        coordinator = Coordinator(db)
+        recovery = coordinator.run_recovery()
+
+        result = {
+            "dead_agents_recovered": recovery["dead_agents"],
+            "stale_tasks_recovered": recovery["stale_tasks"],
+            "tasks_requeued": recovery["requeued_tasks"],
+        }
+
+        if as_json:
+            output_json(result)
+        else:
+            if recovery["dead_agents"]:
+                console.print(f"[green]✓[/green] Recovered {len(recovery['dead_agents'])} dead agent(s):")
+                for agent_id in recovery["dead_agents"]:
+                    console.print(f"    • {agent_id[:8]}")
+            else:
+                console.print("[dim]No dead agents found[/dim]")
+
+            if recovery["stale_tasks"]:
+                console.print(f"[green]✓[/green] Recovered {recovery['stale_tasks']} stale task(s)")
+
+            if recovery["requeued_tasks"]:
+                console.print(f"[green]✓[/green] Requeued {recovery['requeued_tasks']} abandoned task(s)")
+
+            if not any([recovery["dead_agents"], recovery["stale_tasks"], recovery["requeued_tasks"]]):
+                console.print("[green]✓[/green] System is healthy - no recovery needed")
 
     finally:
         db.close()
@@ -1689,7 +1807,7 @@ def logs(agent: str, task_id: str, refresh: int, as_json: bool):
             db.close()
 
     if not as_json:
-        console.print(f"[dim]Tailing event log... (Ctrl+C to stop)[/dim]")
+        console.print("[dim]Tailing event log... (Ctrl+C to stop)[/dim]")
         if agent:
             console.print(f"[dim]Filtering by agent: {agent}[/dim]")
         if task_id:
@@ -2059,7 +2177,7 @@ AGENT_MD_FILES = {
 @click.option("--claude", is_flag=True, help="Add instructions to CLAUDE.md (Claude Code)")
 @click.option("--codex", is_flag=True, help="Add instructions to AGENTS.md (Codex CLI)")
 @click.option("--gemini", is_flag=True, help="Add instructions to GEMINI.md (Gemini CLI)")
-@click.option("--all", "all_agents", is_flag=True, help="Add instructions to all agent MD files")
+@click.option("--all", "all_agents", is_flag=True, help="Add instructions to all agent files")
 @click.option("--print", "print_only", is_flag=True, help="Print instructions without writing")
 @require_init
 def setup(claude: bool, codex: bool, gemini: bool, all_agents: bool, print_only: bool):
@@ -2072,7 +2190,7 @@ def setup(claude: bool, codex: bool, gemini: bool, all_agents: bool, print_only:
         aqua setup --claude    # For Claude Code (CLAUDE.md)
         aqua setup --codex     # For Codex CLI (AGENTS.md)
         aqua setup --gemini    # For Gemini CLI (GEMINI.md)
-        aqua setup --all       # All of the above
+        aqua setup --all       # All agents
     """
     project_dir = get_project_dir()
 
@@ -2116,9 +2234,9 @@ def setup(claude: bool, codex: bool, gemini: bool, all_agents: bool, print_only:
         console.print(f"[green]✓[/green] Created {default_md}")
         console.print()
         console.print("To add to agent-specific instruction files:")
-        console.print("  aqua setup --claude    [dim]# For Claude Code (CLAUDE.md)[/dim]")
-        console.print("  aqua setup --codex     [dim]# For Codex CLI (AGENTS.md)[/dim]")
-        console.print("  aqua setup --gemini    [dim]# For Gemini CLI (GEMINI.md)[/dim]")
+        console.print("  aqua setup --claude    [dim]# Claude Code (CLAUDE.md)[/dim]")
+        console.print("  aqua setup --codex     [dim]# Codex CLI (AGENTS.md)[/dim]")
+        console.print("  aqua setup --gemini    [dim]# Gemini CLI (GEMINI.md)[/dim]")
         console.print("  aqua setup --all       [dim]# All of the above[/dim]")
 
 
@@ -2236,26 +2354,24 @@ AGENT_CLI_CONFIG = {
         "install_url": "https://claude.ai/code",
         "background_args": ["--print", "--dangerously-skip-permissions"],
         "model_arg": "--model",
-        "default_model": "sonnet",
     },
     "codex": {
         "command": "codex",
         "install_url": "https://github.com/openai/codex-cli",
-        "background_args": ["--approval-mode", "full-auto"],
+        # Use 'exec' subcommand for non-interactive + --full-auto for sandboxed auto-approval
+        "background_args": ["exec", "--full-auto"],
         "model_arg": "--model",
-        "default_model": "o4-mini",
     },
     "gemini": {
         "command": "gemini",
         "install_url": "https://github.com/google/gemini-cli",
         "background_args": [],  # TBD - adjust based on actual CLI
         "model_arg": "--model",
-        "default_model": "gemini-2.5-pro",
     },
 }
 
 
-def _detect_agent_cli() -> Optional[str]:
+def _detect_agent_cli() -> str | None:
     """Detect which agent CLI is available."""
     import shutil
     for cli_name in ["claude", "codex", "gemini"]:
@@ -2267,19 +2383,22 @@ def _detect_agent_cli() -> Optional[str]:
 @main.command()
 @click.argument("count", type=int, default=1)
 @click.option("--name-prefix", default="worker", help="Prefix for agent names")
-@click.option("--cli", "agent_cli", type=click.Choice(["claude", "codex", "gemini", "auto"]),
-              default="auto", help="Agent CLI to use (default: auto-detect)")
+@click.option("--claude", "use_claude", is_flag=True, help="Use Claude Code agents")
+@click.option("--codex", "use_codex", is_flag=True, help="Use Codex CLI agents")
+@click.option("--gemini", "use_gemini", is_flag=True, help="Use Gemini CLI agents")
 @click.option("--model", default=None, help="Model to use (default depends on CLI)")
 @click.option("--background/--interactive", "-b/-i", default=False,
               help="Background (autonomous) or interactive (new terminals)")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation for background mode")
 @click.option("--dry-run", is_flag=True, help="Show commands without executing")
 @click.option("--worktree/--no-worktree", default=False, help="Create git worktrees for each agent")
 @require_init
-def spawn(count: int, name_prefix: str, agent_cli: str, model: str, background: bool, dry_run: bool, worktree: bool):
+def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_gemini: bool, model: str, background: bool, yes: bool, dry_run: bool, worktree: bool):
     """Spawn AI agents to work on tasks.
 
     Supports multiple agent CLIs: Claude Code, Codex CLI, Gemini CLI.
-    Auto-detects which CLI is available if not specified.
+    Specify multiple CLI flags to mix agents (round-robin assignment).
+    Auto-detects which CLI is available if none specified.
 
     \b
     INTERACTIVE (default, --interactive or -i):
@@ -2293,18 +2412,28 @@ def spawn(count: int, name_prefix: str, agent_cli: str, model: str, background: 
       trusting agents to run without supervision.
 
     Examples:
-        aqua spawn 3                    # 3 interactive agents (auto-detect CLI)
-        aqua spawn 2 -b                 # 2 background autonomous agents
-        aqua spawn 2 --cli codex        # Use Codex CLI specifically
-        aqua spawn 1 --dry-run          # Show what would be executed
+        aqua spawn 3                       # 3 agents (auto-detect CLI)
+        aqua spawn 2 -b                    # 2 background autonomous agents
+        aqua spawn 2 --codex               # 2 Codex agents
+        aqua spawn 3 --claude --codex      # 2 Claude + 1 Codex (round-robin)
+        aqua spawn 4 -b --claude --codex --gemini  # Mix of all three
     """
-    import subprocess
     import shutil
+    import subprocess
 
     project_dir = get_project_dir()
 
-    # Detect or validate agent CLI
-    if agent_cli == "auto":
+    # Build list of CLIs to use (round-robin)
+    cli_list = []
+    if use_claude:
+        cli_list.append("claude")
+    if use_codex:
+        cli_list.append("codex")
+    if use_gemini:
+        cli_list.append("gemini")
+
+    # Auto-detect if none specified
+    if not cli_list:
         detected = _detect_agent_cli()
         if not detected:
             console.print("[red]Error:[/red] No agent CLI found in PATH.")
@@ -2312,26 +2441,54 @@ def spawn(count: int, name_prefix: str, agent_cli: str, model: str, background: 
             for name, config in AGENT_CLI_CONFIG.items():
                 console.print(f"  {name}: {config['install_url']}")
             sys.exit(1)
-        agent_cli = detected
-        console.print(f"[dim]Using {agent_cli} CLI[/dim]")
+        cli_list = [detected]
+        console.print(f"[dim]Using {detected} CLI[/dim]")
 
-    cli_config = AGENT_CLI_CONFIG[agent_cli]
-    cli_command = cli_config["command"]
+    # Verify all specified CLIs are available
+    for cli_name in cli_list:
+        cli_config = AGENT_CLI_CONFIG[cli_name]
+        cli_path = shutil.which(cli_config["command"])
+        if not cli_path:
+            console.print(f"[red]Error:[/red] '{cli_config['command']}' command not found in PATH.")
+            console.print(f"Install: {cli_config['install_url']}")
+            sys.exit(1)
 
-    # Check CLI is available
-    cli_path = shutil.which(cli_command)
-    if not cli_path:
-        console.print(f"[red]Error:[/red] '{cli_command}' command not found in PATH.")
-        console.print(f"Install: {cli_config['install_url']}")
-        sys.exit(1)
+    # Warn about dangerous permissions in background mode
+    if background and not dry_run and not yes:
+        console.print()
+        console.print("[bold yellow]⚠️  WARNING: Background mode grants full autonomous control[/bold yellow]")
+        console.print()
+        console.print("Agents will run with these dangerous flags:")
+        for cli_name in cli_list:
+            cfg = AGENT_CLI_CONFIG[cli_name]
+            console.print(f"  • {cli_name}: {' '.join(cfg['background_args'])}")
+        console.print()
+        console.print("[dim]This means agents can read, write, and execute ANY code without asking.[/dim]")
+        console.print("[dim]Only proceed if you trust the agents and have reviewed the tasks.[/dim]")
+        console.print()
 
-    # Use default model if not specified
-    if model is None:
-        model = cli_config["default_model"]
+        if not click.confirm("Spawn background agents with full permissions?", default=False):
+            console.print("[yellow]Aborted.[/yellow] Use -i/--interactive for supervised mode.")
+            sys.exit(0)
+        console.print()
 
     spawned = []
 
+    # Update heartbeat if we're a registered agent (keeps leader alive during spawn)
+    spawning_agent_id = get_stored_agent_id()
+    if spawning_agent_id:
+        db = get_db(project_dir)
+        try:
+            db.update_heartbeat(spawning_agent_id)
+        finally:
+            db.close()
+
     for i in range(1, count + 1):
+        # Round-robin CLI assignment
+        cli_name = cli_list[(i - 1) % len(cli_list)]
+        cli_config = AGENT_CLI_CONFIG[cli_name]
+        cli_command = cli_config["command"]
+
         agent_name = f"{name_prefix}-{i}"
         work_dir = project_dir
 
@@ -2360,15 +2517,16 @@ def spawn(count: int, name_prefix: str, agent_cli: str, model: str, background: 
         if background:
             # Background mode: use CLI-specific autonomous flags
             cmd = [cli_command] + cli_config["background_args"]
-            if cli_config["model_arg"]:
+            if model and cli_config["model_arg"]:
                 cmd.extend([cli_config["model_arg"], model])
             cmd.append(prompt)
 
             if dry_run:
-                console.print(f"\n[bold]Agent {agent_name} (background):[/bold]")
+                console.print(f"\n[bold]Agent {agent_name} (background, {cli_name}):[/bold]")
                 console.print(f"  Directory: {work_dir}")
                 bg_args = " ".join(cli_config["background_args"])
-                console.print(f"  Command: {cli_command} {bg_args} {cli_config['model_arg']} {model} '<prompt>'")
+                model_part = f" {cli_config['model_arg']} {model}" if model else ""
+                console.print(f"  Command: {cli_command} {bg_args}{model_part} '<prompt>'")
                 continue
 
             # Spawn as background process
@@ -2391,8 +2549,9 @@ def spawn(count: int, name_prefix: str, agent_cli: str, model: str, background: 
                     "pid": process.pid,
                     "log": str(log_file),
                     "mode": "background",
+                    "cli": cli_name,
                 })
-                console.print(f"[green]✓[/green] Spawned [cyan]{agent_name}[/cyan] (PID: {process.pid}) [dim]background[/dim]")
+                console.print(f"[green]✓[/green] Spawned [cyan]{agent_name}[/cyan] (PID: {process.pid}) [dim]{cli_name}, background[/dim]")
 
             except Exception as e:
                 console.print(f"[red]Error spawning {agent_name}:[/red] {e}")
@@ -2400,43 +2559,72 @@ def spawn(count: int, name_prefix: str, agent_cli: str, model: str, background: 
         else:
             # Interactive mode: open new terminal with agent CLI
             if dry_run:
-                console.print(f"\n[bold]Agent {agent_name} (interactive):[/bold]")
+                console.print(f"\n[bold]Agent {agent_name} (interactive, {cli_name}):[/bold]")
                 console.print(f"  Directory: {work_dir}")
-                console.print(f"  Opens new terminal with: {cli_command} {cli_config['model_arg']} {model} '<prompt>'")
+                model_part = f" {cli_config['model_arg']} {model}" if model else ""
+                console.print(f"  Opens new terminal with: {cli_command}{model_part} '<prompt>'")
                 continue
 
             # Platform-specific terminal opening
             if sys.platform == "darwin":
-                # macOS: use osascript to open Terminal.app
+                # macOS: use osascript to open iTerm2 or Terminal.app
                 # Write prompt to a temp file to avoid escaping nightmares
                 prompt_file = project_dir / ".aqua" / f"{agent_name}.prompt"
                 prompt_file.write_text(prompt)
 
                 # Set AQUA_SESSION_ID so each agent has its own session file
-                # Build CLI command with model argument
-                model_part = f"{cli_config['model_arg']} {model}" if cli_config['model_arg'] else ""
-                shell_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && {cli_command} {model_part} \"$(cat '{prompt_file}')\""
+                # Build CLI command with model argument (only if specified)
+                model_part = f" {cli_config['model_arg']} {model}" if model else ""
+                shell_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && {cli_command}{model_part} \"$(cat '{prompt_file}')\""
 
-                script = f'''
+                # Escape quotes for AppleScript (can't use backslash in f-string on Python 3.10)
+                escaped_cmd = shell_cmd.replace('"', '\\"')
+
+                # Try iTerm2 first, then fall back to Terminal.app
+                iterm_script = f'''
+tell application "iTerm"
+    activate
+    create window with default profile
+    tell current session of current window
+        write text "{escaped_cmd}"
+    end tell
+end tell
+'''
+                terminal_script = f'''
 tell application "Terminal"
     activate
-    do script "{shell_cmd.replace('"', '\\"')}"
+    do script "{escaped_cmd}"
 end tell
 '''
                 try:
-                    subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
+                    # Detect which terminal the user is currently using
+                    term_program = os.environ.get("TERM_PROGRAM", "")
+                    use_iterm = "iTerm" in term_program
+
+                    # Fallback: check if iTerm2 is installed
+                    if not use_iterm and not term_program:
+                        use_iterm = Path("/Applications/iTerm.app").exists()
+
+                    if use_iterm:
+                        subprocess.run(["osascript", "-e", iterm_script], check=True, capture_output=True)
+                        terminal_used = "iTerm2"
+                    else:
+                        subprocess.run(["osascript", "-e", terminal_script], check=True, capture_output=True)
+                        terminal_used = "Terminal"
+
                     spawned.append({
                         "name": agent_name,
                         "mode": "interactive",
+                        "cli": cli_name,
                     })
-                    console.print(f"[green]✓[/green] Opened terminal for [cyan]{agent_name}[/cyan]")
+                    console.print(f"[green]✓[/green] Opened {terminal_used} for [cyan]{agent_name}[/cyan] [dim]{cli_name}[/dim]")
                 except Exception as e:
                     console.print(f"[red]Error opening terminal for {agent_name}:[/red] {e}")
 
             elif sys.platform == "linux":
                 # Linux: try common terminal emulators
-                model_part = f"{cli_config['model_arg']} {model}" if cli_config['model_arg'] else ""
-                cli_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && {cli_command} {model_part} '{prompt}'"
+                model_part = f" {cli_config['model_arg']} {model}" if model else ""
+                cli_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && {cli_command}{model_part} '{prompt}'"
                 terminals = [
                     ["gnome-terminal", "--", "bash", "-c", f"{cli_cmd}; exec bash"],
                     ["xterm", "-e", f"{cli_cmd}; bash"],
@@ -2447,8 +2635,8 @@ end tell
                     if shutil.which(term_cmd[0]):
                         try:
                             subprocess.Popen(term_cmd, start_new_session=True)
-                            spawned.append({"name": agent_name, "mode": "interactive"})
-                            console.print(f"[green]✓[/green] Opened terminal for [cyan]{agent_name}[/cyan]")
+                            spawned.append({"name": agent_name, "mode": "interactive", "cli": cli_name})
+                            console.print(f"[green]✓[/green] Opened terminal for [cyan]{agent_name}[/cyan] [dim]{cli_name}[/dim]")
                             opened = True
                             break
                         except Exception:
@@ -2469,15 +2657,71 @@ end tell
         return
 
     if spawned:
-        console.print()
-        console.print(f"[green]Spawned {len(spawned)} agent(s)[/green]")
-        console.print()
-
         bg_agents = [a for a in spawned if a.get("mode") == "background"]
         int_agents = [a for a in spawned if a.get("mode") == "interactive"]
 
+        # Validate background agents actually started
         if bg_agents:
-            console.print("Background agents - monitor with:")
+            import time as time_module
+            console.print()
+            console.print("[dim]Waiting for agents to join...[/dim]")
+
+            db = get_db(project_dir)
+            try:
+                join_timeout = 30  # seconds
+                check_interval = 2  # seconds
+                max_checks = join_timeout // check_interval
+
+                pending_agents = {a["name"]: a for a in bg_agents}
+                joined_agents = []
+                failed_agents = []
+
+                for check in range(max_checks):
+                    if not pending_agents:
+                        break
+
+                    time_module.sleep(check_interval)
+
+                    # Keep spawning agent alive while waiting
+                    if spawning_agent_id:
+                        db.update_heartbeat(spawning_agent_id)
+
+                    # Check which agents have joined
+                    for agent_name in list(pending_agents.keys()):
+                        agent_info = pending_agents[agent_name]
+
+                        # Check if process is still alive
+                        if not process_exists(agent_info["pid"]):
+                            console.print(f"[red]✗[/red] {agent_name} process died (check logs)")
+                            failed_agents.append(agent_name)
+                            del pending_agents[agent_name]
+                            continue
+
+                        # Check if agent has joined in database
+                        agents = db.get_all_agents()
+                        for agent in agents:
+                            if agent.name == agent_name:
+                                console.print(f"[green]✓[/green] {agent_name} joined successfully")
+                                joined_agents.append(agent_name)
+                                del pending_agents[agent_name]
+                                break
+
+                # Report remaining agents as timeout
+                for agent_name in pending_agents:
+                    console.print(f"[yellow]![/yellow] {agent_name} didn't join within {join_timeout}s (may still be starting)")
+                    failed_agents.append(agent_name)
+
+                console.print()
+                if joined_agents:
+                    console.print(f"[green]✓ {len(joined_agents)} agent(s) started successfully[/green]")
+                if failed_agents:
+                    console.print(f"[yellow]! {len(failed_agents)} agent(s) may have issues[/yellow]")
+
+            finally:
+                db.close()
+
+            console.print()
+            console.print("Monitor with:")
             console.print("  aqua status          # See agent status")
             console.print("  aqua watch           # Live dashboard")
             for agent in bg_agents:

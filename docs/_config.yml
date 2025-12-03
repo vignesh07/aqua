@@ -1,0 +1,5 @@
+title: Aqua
+description: Autonomous QUorum of Agents - Lightweight coordinator for CLI AI agents
+remote_theme: pages-themes/minimal@v0.2.0
+plugins:
+  - jekyll-remote-theme
