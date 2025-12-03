@@ -166,9 +166,10 @@ class Message:
     from_agent: str
     to_agent: Optional[str]  # None = broadcast
     content: str
-    message_type: str = "chat"
+    message_type: str = "chat"  # "chat", "question", "answer"
     created_at: datetime = field(default_factory=datetime.utcnow)
     read_at: Optional[datetime] = None
+    reply_to: Optional[int] = None  # ID of message this is replying to
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -180,6 +181,7 @@ class Message:
             "message_type": self.message_type,
             "created_at": self.created_at.isoformat(),
             "read_at": self.read_at.isoformat() if self.read_at else None,
+            "reply_to": self.reply_to,
         }
 
     @classmethod
@@ -193,6 +195,7 @@ class Message:
             message_type=row["message_type"],
             created_at=datetime.fromisoformat(row["created_at"]),
             read_at=datetime.fromisoformat(row["read_at"]) if row["read_at"] else None,
+            reply_to=row.get("reply_to"),
         )
 
 

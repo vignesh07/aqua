@@ -80,6 +80,8 @@ aqua msg "text" --to NAME     # Direct message to agent
 aqua msg "text" --to @leader  # Message the leader
 aqua inbox                    # Show all messages
 aqua inbox --unread           # Show only unread messages
+aqua ask "question" --to NAME # Ask and wait for reply (blocking)
+aqua reply <msg_id> "answer"  # Reply to a question
 ```
 
 ### Monitoring

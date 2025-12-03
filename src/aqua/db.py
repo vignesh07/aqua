@@ -10,7 +10,7 @@ from typing import Optional, List, Generator, Any
 from aqua.models import Agent, Task, Message, Leader, Event, AgentStatus, TaskStatus
 
 # Schema version for migrations
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 -- Enable WAL mode for concurrent access
@@ -82,11 +82,13 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     message_type TEXT DEFAULT 'chat',
     created_at TEXT NOT NULL,
-    read_at TEXT
+    read_at TEXT,
+    reply_to INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent, read_at);
 CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_agent);
+CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to);
 
 -- Events table: audit log
 CREATE TABLE IF NOT EXISTS events (
@@ -579,15 +581,16 @@ class Database:
         content: str,
         to_agent: Optional[str] = None,
         message_type: str = "chat",
+        reply_to: Optional[int] = None,
     ) -> Message:
         """Create a new message."""
         now = datetime.utcnow().isoformat()
         cursor = self.conn.execute(
             """
-            INSERT INTO messages (from_agent, to_agent, content, message_type, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO messages (from_agent, to_agent, content, message_type, created_at, reply_to)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (from_agent, to_agent, content, message_type, now)
+            (from_agent, to_agent, content, message_type, now, reply_to)
         )
         msg_id = cursor.lastrowid
         return Message(
@@ -598,7 +601,22 @@ class Database:
             message_type=message_type,
             created_at=datetime.fromisoformat(now),
             read_at=None,
+            reply_to=reply_to,
         )
+
+    def get_message(self, message_id: int) -> Optional[Message]:
+        """Get a message by ID."""
+        cursor = self.conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
+        row = cursor.fetchone()
+        return Message.from_row(dict(row)) if row else None
+
+    def get_replies(self, message_id: int) -> List[Message]:
+        """Get all replies to a message."""
+        cursor = self.conn.execute(
+            "SELECT * FROM messages WHERE reply_to = ? ORDER BY created_at ASC",
+            (message_id,)
+        )
+        return [Message.from_row(dict(row)) for row in cursor.fetchall()]
 
     def get_messages(
         self,
@@ -796,6 +814,19 @@ def _run_migrations(db: Database) -> None:
         except Exception:
             pass  # Column might already exist
         db.conn.execute("UPDATE schema_version SET version = 3")
+        current_version = 3
+
+    # Migration from v3 to v4: add reply_to column to messages
+    if current_version < 4:
+        try:
+            db.conn.execute("ALTER TABLE messages ADD COLUMN reply_to INTEGER")
+        except Exception:
+            pass  # Column might already exist
+        try:
+            db.conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to)")
+        except Exception:
+            pass
+        db.conn.execute("UPDATE schema_version SET version = 4")
 
 
 def init_db(project_dir: Path) -> Database:

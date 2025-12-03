@@ -1079,6 +1079,152 @@ def inbox(unread: bool, as_json: bool):
         db.close()
 
 
+@main.command()
+@click.argument("question")
+@click.option("--to", "to_agent", required=True, help="Recipient agent name")
+@click.option("--timeout", default=300, help="Timeout in seconds (default: 300)")
+@click.option("--poll", default=2, help="Poll interval in seconds (default: 2)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def ask(question: str, to_agent: str, timeout: int, poll: int, as_json: bool):
+    """Ask a question and wait for a reply.
+
+    Sends a question to another agent and blocks until they reply
+    using 'aqua reply'. Useful for synchronous coordination.
+
+    Examples:
+        aqua ask "Should I use Redis or SQLite?" --to worker-2
+        aqua ask "Ready to merge?" --to @leader --timeout 60
+    """
+    import time
+
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        agent_id = get_current_agent_id()
+        if not agent_id:
+            console.print("[red]Error:[/red] Not joined. Run 'aqua join' first.")
+            sys.exit(1)
+
+        agent = db.get_agent(agent_id)
+        if not agent:
+            console.print("[red]Error:[/red] Agent not found.")
+            sys.exit(1)
+
+        # Resolve recipient
+        recipient_id = None
+        if to_agent == "@leader":
+            leader = db.get_leader()
+            if leader:
+                recipient_id = leader.agent_id
+            else:
+                console.print("[red]Error:[/red] No leader elected.")
+                sys.exit(1)
+        else:
+            recipient = db.get_agent_by_name(to_agent)
+            if recipient:
+                recipient_id = recipient.id
+            else:
+                console.print(f"[red]Error:[/red] Agent '{to_agent}' not found.")
+                sys.exit(1)
+
+        # Send the question
+        msg = db.create_message(
+            from_agent=agent_id,
+            content=question,
+            to_agent=recipient_id,
+            message_type="question",
+        )
+
+        if not as_json:
+            console.print(f"[dim]Question sent (id: {msg.id}). Waiting for reply...[/dim]")
+
+        # Poll for reply
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            replies = db.get_replies(msg.id)
+            if replies:
+                reply = replies[0]  # Take first reply
+                if as_json:
+                    output_json({
+                        "question_id": msg.id,
+                        "reply_id": reply.id,
+                        "from": reply.from_agent,
+                        "content": reply.content,
+                    })
+                else:
+                    from_agent = db.get_agent(reply.from_agent)
+                    from_name = from_agent.name if from_agent else reply.from_agent[:8]
+                    console.print(f"\n[green]Reply from {from_name}:[/green]")
+                    console.print(f"  {reply.content}")
+                return
+
+            time.sleep(poll)
+
+        # Timeout
+        if as_json:
+            output_json({"error": "timeout", "question_id": msg.id})
+        else:
+            console.print(f"\n[yellow]Timeout:[/yellow] No reply received after {timeout}s")
+        sys.exit(1)
+
+    finally:
+        db.close()
+
+
+@main.command()
+@click.argument("message_id", type=int)
+@click.argument("response")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def reply(message_id: int, response: str, as_json: bool):
+    """Reply to a question from another agent.
+
+    Use this to respond to questions sent via 'aqua ask'.
+
+    Examples:
+        aqua reply 42 "Use SQLite, it's simpler"
+        aqua inbox --unread  # See pending questions first
+    """
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        agent_id = get_current_agent_id()
+        if not agent_id:
+            console.print("[red]Error:[/red] Not joined. Run 'aqua join' first.")
+            sys.exit(1)
+
+        # Get the original message
+        original = db.get_message(message_id)
+        if not original:
+            console.print(f"[red]Error:[/red] Message {message_id} not found.")
+            sys.exit(1)
+
+        if original.message_type != "question":
+            console.print(f"[yellow]Warning:[/yellow] Message {message_id} is not a question.")
+
+        # Send the reply
+        reply_msg = db.create_message(
+            from_agent=agent_id,
+            content=response,
+            to_agent=original.from_agent,
+            message_type="answer",
+            reply_to=message_id,
+        )
+
+        if as_json:
+            output_json(reply_msg.to_dict())
+        else:
+            from_agent = db.get_agent(original.from_agent)
+            from_name = from_agent.name if from_agent else original.from_agent[:8]
+            console.print(f"[green]✓[/green] Replied to {from_name}'s question (msg {message_id})")
+
+    finally:
+        db.close()
+
+
 # =============================================================================
 # File Lock Commands
 # =============================================================================
@@ -1635,6 +1781,8 @@ aqua msg "text" --to NAME     # Direct message to agent
 aqua msg "text" --to @leader  # Message the leader
 aqua inbox                    # Show all messages
 aqua inbox --unread           # Show only unread messages
+aqua ask "question" --to NAME # Ask and wait for reply (blocking)
+aqua reply <msg_id> "answer"  # Reply to a question
 ```
 
 ### Monitoring
