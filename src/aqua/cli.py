@@ -2070,6 +2070,9 @@ def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: b
             # Spawn as background process
             try:
                 log_file = project_dir / ".aqua" / f"{agent_name}.log"
+                # Set AQUA_SESSION_ID so each agent has its own session file
+                env = os.environ.copy()
+                env["AQUA_SESSION_ID"] = agent_name
                 with open(log_file, "w") as log:
                     process = subprocess.Popen(
                         cmd,
@@ -2077,6 +2080,7 @@ def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: b
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         start_new_session=True,  # Detach from terminal
+                        env=env,
                     )
                 spawned.append({
                     "name": agent_name,
@@ -2104,8 +2108,9 @@ def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: b
                 prompt_file = project_dir / ".aqua" / f"{agent_name}.prompt"
                 prompt_file.write_text(prompt)
 
-                # Simple shell command that reads prompt from file
-                shell_cmd = f"cd '{work_dir}' && claude --model {model} \"$(cat '{prompt_file}')\""
+                # Set AQUA_SESSION_ID so each agent has its own session file
+                # Shell command that sets env, changes dir, and runs claude
+                shell_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && claude --model {model} \"$(cat '{prompt_file}')\""
 
                 script = f'''
 tell application "Terminal"
