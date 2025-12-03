@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 
+-- File locks table: prevent conflicts
+CREATE TABLE IF NOT EXISTS file_locks (
+    file_path TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    locked_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_locks_agent ON file_locks(agent_id);
+
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -677,6 +686,72 @@ class Database:
 
         cursor = self.conn.execute(query, params)
         return [Event.from_row(dict(row)) for row in cursor.fetchall()]
+
+    # =========================================================================
+    # File Lock Operations
+    # =========================================================================
+
+    def lock_file(self, file_path: str, agent_id: str) -> bool:
+        """Lock a file for exclusive access. Returns True if successful."""
+        now = datetime.utcnow().isoformat()
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO file_locks (file_path, agent_id, locked_at)
+                VALUES (?, ?, ?)
+                """,
+                (file_path, agent_id, now)
+            )
+            self.log_event("file_locked", agent_id=agent_id, details={"file": file_path})
+            return True
+        except sqlite3.IntegrityError:
+            # Already locked
+            return False
+
+    def unlock_file(self, file_path: str, agent_id: str) -> bool:
+        """Unlock a file. Only the locking agent can unlock."""
+        cursor = self.conn.execute(
+            "DELETE FROM file_locks WHERE file_path = ? AND agent_id = ?",
+            (file_path, agent_id)
+        )
+        if cursor.rowcount == 1:
+            self.log_event("file_unlocked", agent_id=agent_id, details={"file": file_path})
+            return True
+        return False
+
+    def get_file_lock(self, file_path: str) -> Optional[dict]:
+        """Get lock info for a file."""
+        cursor = self.conn.execute(
+            "SELECT * FROM file_locks WHERE file_path = ?",
+            (file_path,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return {"file_path": row["file_path"], "agent_id": row["agent_id"], "locked_at": row["locked_at"]}
+        return None
+
+    def get_all_locks(self) -> List[dict]:
+        """Get all file locks."""
+        cursor = self.conn.execute("SELECT * FROM file_locks ORDER BY locked_at DESC")
+        return [{"file_path": row["file_path"], "agent_id": row["agent_id"], "locked_at": row["locked_at"]}
+                for row in cursor.fetchall()]
+
+    def get_agent_locks(self, agent_id: str) -> List[dict]:
+        """Get all files locked by an agent."""
+        cursor = self.conn.execute(
+            "SELECT * FROM file_locks WHERE agent_id = ? ORDER BY locked_at DESC",
+            (agent_id,)
+        )
+        return [{"file_path": row["file_path"], "agent_id": row["agent_id"], "locked_at": row["locked_at"]}
+                for row in cursor.fetchall()]
+
+    def release_agent_locks(self, agent_id: str) -> int:
+        """Release all locks held by an agent. Returns count released."""
+        cursor = self.conn.execute(
+            "DELETE FROM file_locks WHERE agent_id = ?",
+            (agent_id,)
+        )
+        return cursor.rowcount
 
 
 def get_db(project_dir: Path) -> Database:

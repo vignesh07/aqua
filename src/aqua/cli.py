@@ -1072,6 +1072,155 @@ def inbox(unread: bool, as_json: bool):
 
 
 # =============================================================================
+# File Lock Commands
+# =============================================================================
+
+@main.command()
+@click.argument("file_path")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def lock(file_path: str, as_json: bool):
+    """Lock a file to prevent other agents from editing it.
+
+    Example:
+        aqua lock src/handlers.py
+    """
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        agent_id = get_stored_agent_id()
+        if not agent_id:
+            console.print("[red]Error:[/red] Not joined. Run 'aqua join' first.")
+            sys.exit(1)
+
+        db.update_heartbeat(agent_id)
+
+        # Normalize path
+        file_path = str(Path(file_path).resolve())
+
+        # Check if already locked
+        existing = db.get_file_lock(file_path)
+        if existing:
+            locker = db.get_agent(existing["agent_id"])
+            locker_name = locker.name if locker else existing["agent_id"][:8]
+
+            if existing["agent_id"] == agent_id:
+                if as_json:
+                    output_json({"success": True, "message": "You already have this file locked"})
+                else:
+                    console.print(f"[yellow]You already have this file locked.[/yellow]")
+            else:
+                if as_json:
+                    output_json({"success": False, "locked_by": locker_name})
+                else:
+                    console.print(f"[red]Error:[/red] File locked by [cyan]{locker_name}[/cyan]")
+                    sys.exit(1)
+            return
+
+        if db.lock_file(file_path, agent_id):
+            if as_json:
+                output_json({"success": True, "file": file_path})
+            else:
+                console.print(f"[green]✓[/green] Locked [cyan]{file_path}[/cyan]")
+        else:
+            if as_json:
+                output_json({"success": False, "error": "Failed to lock"})
+            else:
+                console.print("[red]Error:[/red] Failed to lock file.")
+                sys.exit(1)
+
+    finally:
+        db.close()
+
+
+@main.command()
+@click.argument("file_path")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def unlock(file_path: str, as_json: bool):
+    """Unlock a file you previously locked.
+
+    Example:
+        aqua unlock src/handlers.py
+    """
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        agent_id = get_stored_agent_id()
+        if not agent_id:
+            console.print("[red]Error:[/red] Not joined. Run 'aqua join' first.")
+            sys.exit(1)
+
+        db.update_heartbeat(agent_id)
+
+        # Normalize path
+        file_path = str(Path(file_path).resolve())
+
+        if db.unlock_file(file_path, agent_id):
+            if as_json:
+                output_json({"success": True, "file": file_path})
+            else:
+                console.print(f"[green]✓[/green] Unlocked [cyan]{file_path}[/cyan]")
+        else:
+            # Check if someone else has it locked
+            existing = db.get_file_lock(file_path)
+            if existing:
+                locker = db.get_agent(existing["agent_id"])
+                locker_name = locker.name if locker else existing["agent_id"][:8]
+                if as_json:
+                    output_json({"success": False, "error": f"Locked by {locker_name}"})
+                else:
+                    console.print(f"[red]Error:[/red] File locked by [cyan]{locker_name}[/cyan], not you.")
+            else:
+                if as_json:
+                    output_json({"success": False, "error": "File not locked"})
+                else:
+                    console.print("[yellow]File is not locked.[/yellow]")
+
+    finally:
+        db.close()
+
+
+@main.command()
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def locks(as_json: bool):
+    """List all file locks."""
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        all_locks = db.get_all_locks()
+
+        if as_json:
+            output_json(all_locks)
+            return
+
+        if not all_locks:
+            console.print("[dim]No files currently locked.[/dim]")
+            return
+
+        table = Table(box=box.SIMPLE)
+        table.add_column("File", style="cyan")
+        table.add_column("Locked By", style="yellow")
+        table.add_column("Since", style="dim")
+
+        for lock_info in all_locks:
+            agent = db.get_agent(lock_info["agent_id"])
+            agent_name = agent.name if agent else lock_info["agent_id"][:8]
+            locked_at = datetime.fromisoformat(lock_info["locked_at"])
+            time_ago = format_time_ago(locked_at)
+            table.add_row(lock_info["file_path"], agent_name, time_ago)
+
+        console.print(table)
+
+    finally:
+        db.close()
+
+
+# =============================================================================
 # Watch Command
 # =============================================================================
 
