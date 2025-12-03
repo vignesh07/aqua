@@ -32,6 +32,78 @@ aqua msg "text"      # Send message to all agents
 aqua inbox --unread  # Check for messages
 ```
 
+## Full Command Reference
+
+### Core Commands
+```bash
+aqua init                     # Initialize Aqua in this directory
+aqua status                   # Show all tasks, agents, leader, and locks
+aqua refresh                  # Restore agent identity after context reset
+```
+
+### Task Management
+```bash
+aqua add "Title" [OPTIONS]    # Add a new task
+  -d, --description TEXT      # Task description
+  -p, --priority 1-10         # Priority (higher = more urgent, default: 5)
+  -t, --tag TAG               # Add tag (repeatable)
+  --context TEXT              # Additional context
+  --depends-on ID             # Task ID this depends on (repeatable)
+  --after "Title"             # Task title this depends on (fuzzy match)
+
+aqua claim [TASK_ID]          # Claim next pending task (or specific task)
+aqua show [TASK_ID]           # Show task details
+aqua done [--summary TEXT]    # Mark current task complete
+aqua fail --reason TEXT       # Mark current task as failed
+aqua progress "message"       # Report progress on current task
+```
+
+### Agent Management
+```bash
+aqua join [-n NAME]           # Register as an agent
+aqua leave                    # Leave the quorum
+aqua ps                       # Show all agent processes
+aqua kill [NAME|--all]        # Kill agent(s)
+```
+
+### File Locking (Prevent Conflicts)
+```bash
+aqua lock <file>              # Lock a file for exclusive editing
+aqua unlock <file>            # Release a file lock
+aqua locks                    # Show all current file locks
+```
+
+### Communication
+```bash
+aqua msg "text"               # Broadcast message to all agents
+aqua msg "text" --to NAME     # Direct message to agent
+aqua msg "text" --to @leader  # Message the leader
+aqua inbox                    # Show all messages
+aqua inbox --unread           # Show only unread messages
+```
+
+### Monitoring
+```bash
+aqua watch                    # Live dashboard (Ctrl+C to exit)
+aqua logs                     # Tail event stream (like tail -f)
+aqua logs --agent NAME        # Tail events for specific agent
+aqua logs --json              # Machine-readable event stream
+aqua log [-n LIMIT]           # View historical events
+```
+
+### Spawning Agents
+```bash
+aqua spawn COUNT              # Spawn COUNT agents in new terminals
+aqua spawn COUNT -b           # Spawn in background (autonomous)
+aqua spawn COUNT --worktree   # Each agent gets own git worktree
+```
+
+### Utility
+```bash
+aqua doctor                   # Check system health
+aqua setup --claude-md        # Add instructions to CLAUDE.md
+```
+
 ## If You Are Asked to Plan & Coordinate Work
 
 When the user asks you to plan a project or coordinate multi-agent work:

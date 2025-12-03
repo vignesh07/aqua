@@ -1,79 +1,29 @@
 # Aqua TODO - Based on v0.1 Testing Feedback
 
-## High Priority (Blocking Issues)
+## Completed
 
-### 1. Fix agent ID persistence after `aqua join`
-**Problem**: `aqua join` prints the agent ID but doesn't persist it. User has to manually `export AQUA_AGENT_ID=xxx` for every command.
+### 1. ~~Fix agent ID persistence after `aqua join`~~ DONE
+- Changed from PPID-based to "default" session for AI agents without TTY
+- Agent ID now persists correctly and `aqua refresh` works immediately after join
 
-**Solution**:
-- Already have session-based files in `.aqua/sessions/` but it's not working
-- Debug why `store_agent_id()` isn't being called or isn't working after join
-- Ensure `aqua refresh` finds the ID immediately after `aqua join`
+### 2. ~~Fix `aqua spawn` - AppleScript syntax error~~ DONE
+- Fixed by writing prompt to temp file instead of escaping in AppleScript
+- Avoids all quote/newline escaping issues
 
-**Files**: `src/aqua/cli.py` - `join` command, `store_agent_id()`, `get_stored_agent_id()`
+### 3. ~~Task dependencies~~ DONE
+- Added `--depends-on <task_id>` and `--after "title"` options to `aqua add`
+- `claim` automatically skips tasks with unmet dependencies
+- `aqua show` displays blocking dependencies
 
----
+### 4. ~~File locking/claiming~~ DONE
+- Added `aqua lock <file>`, `aqua unlock <file>`, `aqua locks` commands
+- New `file_locks` table with atomic locking via PRIMARY KEY constraint
+- Locks released when agent leaves
 
-### 2. Fix `aqua spawn` - AppleScript syntax error
-**Problem**: `aqua spawn` fails with "Expected end of line" - quote escaping issues in osascript.
-
-**Solution**:
-- Test and fix the AppleScript string escaping
-- Add fallback for non-macOS (Linux: gnome-terminal, xterm, etc.)
-- Add `--dry-run` to show the command without executing
-
-**Files**: `src/aqua/cli.py` - `spawn` command
-
----
-
-## Medium Priority (Important Features)
-
-### 3. Task dependencies
-**Problem**: Can't express "task B depends on task A completing first"
-
-**Solution**:
-```bash
-aqua add "Build API" --depends-on <task_id>
-aqua add "Write tests" --after "Build API"  # by title match
-```
-- Add `depends_on` column to tasks table
-- `claim` skips tasks whose dependencies aren't done
-- `aqua show` displays dependency chain
-
-**Files**: `src/aqua/db.py`, `src/aqua/models.py`, `src/aqua/coordinator.py`, `src/aqua/cli.py`
-
----
-
-### 4. File locking/claiming
-**Problem**: No way to declare "I'm editing this file, don't touch it"
-
-**Solution**:
-```bash
-aqua lock src/handlers.py          # Claim a file
-aqua unlock src/handlers.py        # Release it
-aqua locks                         # Show who has what locked
-```
-- New `file_locks` table: (file_path, agent_id, locked_at)
-- `aqua status` shows locked files
-- Instructions tell agents to check locks before editing
-
-**Files**: New table in `db.py`, new commands in `cli.py`
-
----
-
-### 5. Monitoring subagents from parent
-**Problem**: No visibility into spawned agents' progress until they finish.
-
-**Solution**:
-```bash
-aqua watch --json              # Machine-readable stream
-aqua logs                      # Tail all agent activity
-aqua logs --agent worker-1     # Specific agent's activity
-```
-- Use the existing `events` table for activity log
-- Add more granular events (file edits, progress updates)
-
-**Files**: `src/aqua/cli.py` - enhance `watch`, add `logs` command
+### 5. ~~Monitoring subagents~~ DONE
+- Added `aqua logs` command for real-time event tailing (like `tail -f`)
+- Supports `--agent NAME` and `--task ID` filtering
+- `--json` flag for machine-readable output
 
 ---
 
@@ -111,12 +61,12 @@ Consider documenting this as the recommended approach for Claude specifically.
 
 ## Summary
 
-| Priority | Issue | Effort |
+| Priority | Issue | Status |
 |----------|-------|--------|
-| HIGH | Agent ID not persisting after join | Small |
-| HIGH | `aqua spawn` AppleScript broken | Medium |
-| MED | Task dependencies | Medium |
-| MED | File locking | Medium |
-| MED | Subagent monitoring/logs | Small |
-| LOW | Blocking messages | Medium |
-| LOW | Global JSON mode | Small |
+| HIGH | Agent ID not persisting after join | DONE |
+| HIGH | `aqua spawn` AppleScript broken | DONE |
+| MED | Task dependencies | DONE |
+| MED | File locking | DONE |
+| MED | Subagent monitoring/logs | DONE |
+| LOW | Blocking messages | TODO |
+| LOW | Global JSON mode | TODO |
