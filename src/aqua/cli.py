@@ -313,15 +313,37 @@ def status(as_json: bool):
 @click.option("-p", "--priority", type=int, default=5, help="Priority 1-10 (default: 5)")
 @click.option("-t", "--tag", multiple=True, help="Add tag (can be repeated)")
 @click.option("--context", help="Additional context")
+@click.option("--depends-on", multiple=True, help="Task ID this depends on (can be repeated)")
+@click.option("--after", help="Task title this depends on (fuzzy match)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
-def add(title: str, description: str, priority: int, tag: tuple, context: str, as_json: bool):
-    """Add a new task."""
+def add(title: str, description: str, priority: int, tag: tuple, context: str,
+        depends_on: tuple, after: str, as_json: bool):
+    """Add a new task.
+
+    Examples:
+        aqua add "Build API" -p 8
+        aqua add "Write tests" --depends-on abc123
+        aqua add "Write docs" --after "Build API"
+    """
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
     try:
         agent_id = get_stored_agent_id()
+
+        # Resolve dependencies
+        dep_ids = list(depends_on)
+
+        # Handle --after (title match)
+        if after:
+            tasks = db.get_all_tasks()
+            for t in tasks:
+                if after.lower() in t.title.lower():
+                    dep_ids.append(t.id)
+                    break
+            else:
+                console.print(f"[yellow]Warning:[/yellow] No task found matching '{after}'")
 
         task = Task(
             id=generate_short_id(),
@@ -331,6 +353,7 @@ def add(title: str, description: str, priority: int, tag: tuple, context: str, a
             tags=list(tag),
             context=context,
             created_by=agent_id,
+            depends_on=dep_ids,
         )
 
         db.create_task(task)
@@ -339,6 +362,8 @@ def add(title: str, description: str, priority: int, tag: tuple, context: str, a
             output_json(task.to_dict())
         else:
             console.print(f"[green]✓[/green] Created task [cyan]{task.id}[/cyan]: {title}")
+            if dep_ids:
+                console.print(f"  [dim]Depends on: {', '.join(dep_ids)}[/dim]")
 
     finally:
         db.close()

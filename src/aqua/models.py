@@ -105,6 +105,7 @@ class Task:
     tags: List[str] = field(default_factory=list)
     context: Optional[str] = None
     version: int = 1
+    depends_on: List[str] = field(default_factory=list)  # List of task IDs
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -128,6 +129,7 @@ class Task:
             "tags": self.tags,
             "context": self.context,
             "version": self.version,
+            "depends_on": self.depends_on,
         }
 
     @classmethod
@@ -153,6 +155,7 @@ class Task:
             tags=json.loads(row["tags"]) if row["tags"] else [],
             context=row["context"],
             version=row["version"],
+            depends_on=json.loads(row["depends_on"]) if row.get("depends_on") else [],
         )
 
 

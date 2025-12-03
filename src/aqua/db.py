@@ -10,7 +10,7 @@ from typing import Optional, List, Generator, Any
 from aqua.models import Agent, Task, Message, Leader, Event, AgentStatus, TaskStatus
 
 # Schema version for migrations
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 -- Enable WAL mode for concurrent access
@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     max_retries INTEGER DEFAULT 3,
     tags TEXT,
     context TEXT,
-    version INTEGER DEFAULT 1
+    version INTEGER DEFAULT 1,
+    depends_on TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -256,8 +257,8 @@ class Database:
             INSERT INTO tasks (id, title, description, status, priority, created_by,
                              claimed_by, claim_term, created_at, updated_at, claimed_at,
                              completed_at, result, error, retry_count, max_retries,
-                             tags, context, version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             tags, context, version, depends_on)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.id,
@@ -279,6 +280,7 @@ class Database:
                 json.dumps(task.tags),
                 task.context,
                 task.version,
+                json.dumps(task.depends_on) if task.depends_on else None,
             ),
         )
         self.log_event("task_created", task_id=task.id, details={"title": task.title})
@@ -316,17 +318,43 @@ class Database:
         return [Task.from_row(dict(row)) for row in cursor.fetchall()]
 
     def get_next_pending_task(self) -> Optional[Task]:
-        """Get the next pending task (highest priority, oldest)."""
+        """Get the next pending task (highest priority, oldest) with met dependencies."""
+        # Get all pending tasks ordered by priority
         cursor = self.conn.execute(
             """
             SELECT * FROM tasks
             WHERE status = 'pending'
             ORDER BY priority DESC, created_at ASC
-            LIMIT 1
             """
         )
-        row = cursor.fetchone()
-        return Task.from_row(dict(row)) if row else None
+        rows = cursor.fetchall()
+
+        for row in rows:
+            task = Task.from_row(dict(row))
+            if self._dependencies_met(task):
+                return task
+
+        return None
+
+    def _dependencies_met(self, task: Task) -> bool:
+        """Check if all dependencies of a task are complete."""
+        if not task.depends_on:
+            return True
+
+        for dep_id in task.depends_on:
+            dep_task = self.get_task(dep_id)
+            if not dep_task or dep_task.status != TaskStatus.DONE:
+                return False
+        return True
+
+    def get_blocking_dependencies(self, task: Task) -> List[Task]:
+        """Get list of dependencies that are not yet complete."""
+        blocking = []
+        for dep_id in task.depends_on:
+            dep_task = self.get_task(dep_id)
+            if dep_task and dep_task.status != TaskStatus.DONE:
+                blocking.append(dep_task)
+        return blocking
 
     def claim_task(
         self, task_id: str, agent_id: str, term: int
@@ -684,6 +712,15 @@ def _run_migrations(db: Database) -> None:
         except Exception:
             pass  # Column might already exist
         db.conn.execute("UPDATE schema_version SET version = 2")
+        current_version = 2
+
+    # Migration from v2 to v3: add depends_on column to tasks
+    if current_version < 3:
+        try:
+            db.conn.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
+        except Exception:
+            pass  # Column might already exist
+        db.conn.execute("UPDATE schema_version SET version = 3")
 
 
 def init_db(project_dir: Path) -> Database:
