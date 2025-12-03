@@ -101,7 +101,7 @@ aqua spawn COUNT --worktree   # Each agent gets own git worktree
 ### Utility
 ```bash
 aqua doctor                   # Check system health
-aqua setup --claude-md        # Add instructions to CLAUDE.md
+aqua setup --all              # Add instructions to agent MD files
 ```
 
 ## If You Are Asked to Plan & Coordinate Work

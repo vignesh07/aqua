@@ -194,9 +194,9 @@ def init(force: bool):
         db.close()
         console.print(f"[green]✓[/green] Initialized Aqua in {aqua_dir}")
         console.print("\n[bold]Next steps:[/bold]")
-        console.print("  1. aqua setup --claude-md   [dim]# Add agent instructions to CLAUDE.md[/dim]")
-        console.print("  2. Start Claude and ask it to plan your project using Aqua")
-        console.print("  3. Claude will add tasks and guide you to spawn agents")
+        console.print("  1. aqua setup --all         [dim]# Add agent instructions to MD files[/dim]")
+        console.print("  2. Start your AI agent and ask it to plan using Aqua")
+        console.print("  3. The agent will add tasks and guide you to spawn more agents")
         console.print()
         console.print("[dim]Or manually:[/dim]")
         console.print("  aqua add 'Task description' -p 5")
@@ -1656,7 +1656,7 @@ aqua spawn COUNT --worktree   # Each agent gets own git worktree
 ### Utility
 ```bash
 aqua doctor                   # Check system health
-aqua setup --claude-md        # Add instructions to CLAUDE.md
+aqua setup --all              # Add instructions to agent MD files
 ```
 
 ## If You Are Asked to Plan & Coordinate Work
@@ -1711,20 +1711,19 @@ I've added 6 tasks to the Aqua queue. Here's what to do next:
 
 **Option A: Spawn agents automatically (I'll open terminals for you)**
 I can run `aqua spawn 2` which will open 2 new terminal windows,
-each with a Claude agent that will automatically claim and work on tasks.
+each with an AI agent that will automatically claim and work on tasks.
 
 **Option B: Manual setup (more control)**
 1. Open 2 new terminal windows
 2. In each terminal, navigate to this directory:
    cd /path/to/your/project
-3. In terminal 1, run:
-   claude "Run aqua refresh, then aqua claim, and work on the task"
-4. In terminal 2, run:
-   claude "Run aqua refresh, then aqua claim, and work on the task"
+3. In each terminal, start your AI agent with the prompt:
+   "Run aqua refresh, then aqua claim, and work on the task"
 
 **Monitoring:**
 - Run `aqua status` to see progress
 - Run `aqua watch` for a live dashboard
+- Run `aqua logs` to tail real-time activity
 
 Would you like me to spawn the agents automatically, or will you set them up manually?
 ```
@@ -1830,15 +1829,32 @@ aqua msg "Review?" --to agent-name    # Direct message
 '''
 
 
+# Agent CLI instruction files
+AGENT_MD_FILES = {
+    "claude": "CLAUDE.md",    # Claude Code
+    "codex": "AGENTS.md",     # Codex CLI
+    "gemini": "GEMINI.md",    # Gemini CLI
+}
+
+
 @main.command()
-@click.option("--claude-md", is_flag=True, help="Add instructions to CLAUDE.md")
+@click.option("--claude-md", is_flag=True, help="Add instructions to CLAUDE.md (Claude Code)")
+@click.option("--agents-md", is_flag=True, help="Add instructions to AGENTS.md (Codex CLI)")
+@click.option("--gemini-md", is_flag=True, help="Add instructions to GEMINI.md (Gemini CLI)")
+@click.option("--all", "all_agents", is_flag=True, help="Add instructions to all agent MD files")
 @click.option("--print", "print_only", is_flag=True, help="Print instructions without writing")
 @require_init
-def setup(claude_md: bool, print_only: bool):
+def setup(claude_md: bool, agents_md: bool, gemini_md: bool, all_agents: bool, print_only: bool):
     """Set up project for multi-agent coordination.
 
     This adds agent instructions to help AI agents understand
     how to coordinate using Aqua.
+
+    Examples:
+        aqua setup --claude-md    # For Claude Code
+        aqua setup --agents-md    # For Codex CLI
+        aqua setup --gemini-md    # For Gemini CLI
+        aqua setup --all          # All of the above
     """
     project_dir = get_project_dir()
 
@@ -1846,31 +1862,46 @@ def setup(claude_md: bool, print_only: bool):
         console.print(AGENT_INSTRUCTIONS_TEMPLATE)
         return
 
-    if claude_md:
-        # Add to CLAUDE.md
-        claude_md_path = project_dir / "CLAUDE.md"
-
-        if claude_md_path.exists():
-            existing = claude_md_path.read_text()
-            if "Aqua Multi-Agent" in existing:
-                console.print("[yellow]CLAUDE.md already contains Aqua instructions.[/yellow]")
-                return
-            # Append to existing
-            new_content = existing + "\n\n" + AGENT_INSTRUCTIONS_TEMPLATE
-        else:
-            new_content = AGENT_INSTRUCTIONS_TEMPLATE
-
-        claude_md_path.write_text(new_content)
-        console.print(f"[green]✓[/green] Added Aqua instructions to {claude_md_path}")
+    # Determine which files to write
+    targets = []
+    if all_agents:
+        targets = list(AGENT_MD_FILES.values())
     else:
-        # Create .aqua/AGENTS.md
+        if claude_md:
+            targets.append(AGENT_MD_FILES["claude"])
+        if agents_md:
+            targets.append(AGENT_MD_FILES["codex"])
+        if gemini_md:
+            targets.append(AGENT_MD_FILES["gemini"])
+
+    if targets:
+        for filename in targets:
+            md_path = project_dir / filename
+
+            if md_path.exists():
+                existing = md_path.read_text()
+                if "Aqua Multi-Agent" in existing:
+                    console.print(f"[yellow]{filename} already contains Aqua instructions.[/yellow]")
+                    continue
+                # Append to existing
+                new_content = existing + "\n\n" + AGENT_INSTRUCTIONS_TEMPLATE
+            else:
+                new_content = AGENT_INSTRUCTIONS_TEMPLATE
+
+            md_path.write_text(new_content)
+            console.print(f"[green]✓[/green] Added Aqua instructions to {md_path}")
+    else:
+        # Create .aqua/AGENTS.md as default
         aqua_dir = project_dir / ".aqua"
-        agents_md = aqua_dir / "AGENTS.md"
-        agents_md.write_text(AGENT_INSTRUCTIONS_TEMPLATE)
-        console.print(f"[green]✓[/green] Created {agents_md}")
+        default_md = aqua_dir / "AGENTS.md"
+        default_md.write_text(AGENT_INSTRUCTIONS_TEMPLATE)
+        console.print(f"[green]✓[/green] Created {default_md}")
         console.print()
-        console.print("To add to CLAUDE.md (so Claude Code sees it automatically):")
-        console.print("  aqua setup --claude-md")
+        console.print("To add to agent-specific instruction files:")
+        console.print("  aqua setup --claude-md    [dim]# For Claude Code[/dim]")
+        console.print("  aqua setup --agents-md    [dim]# For Codex CLI[/dim]")
+        console.print("  aqua setup --gemini-md    [dim]# For Gemini CLI[/dim]")
+        console.print("  aqua setup --all          [dim]# All of the above[/dim]")
 
 
 # =============================================================================
@@ -1980,48 +2011,105 @@ Then: aqua claim
 '''
 
 
+# Agent CLI configurations
+AGENT_CLI_CONFIG = {
+    "claude": {
+        "command": "claude",
+        "install_url": "https://claude.ai/code",
+        "background_args": ["--print", "--dangerously-skip-permissions"],
+        "model_arg": "--model",
+        "default_model": "sonnet",
+    },
+    "codex": {
+        "command": "codex",
+        "install_url": "https://github.com/openai/codex-cli",
+        "background_args": ["--approval-mode", "full-auto"],
+        "model_arg": "--model",
+        "default_model": "o4-mini",
+    },
+    "gemini": {
+        "command": "gemini",
+        "install_url": "https://github.com/google/gemini-cli",
+        "background_args": [],  # TBD - adjust based on actual CLI
+        "model_arg": "--model",
+        "default_model": "gemini-2.5-pro",
+    },
+}
+
+
+def _detect_agent_cli() -> Optional[str]:
+    """Detect which agent CLI is available."""
+    import shutil
+    for cli_name in ["claude", "codex", "gemini"]:
+        if shutil.which(AGENT_CLI_CONFIG[cli_name]["command"]):
+            return cli_name
+    return None
+
+
 @main.command()
 @click.argument("count", type=int, default=1)
 @click.option("--name-prefix", default="worker", help="Prefix for agent names")
-@click.option("--model", default="sonnet", help="Model to use (sonnet, opus, haiku)")
+@click.option("--cli", "agent_cli", type=click.Choice(["claude", "codex", "gemini", "auto"]),
+              default="auto", help="Agent CLI to use (default: auto-detect)")
+@click.option("--model", default=None, help="Model to use (default depends on CLI)")
 @click.option("--background/--interactive", "-b/-i", default=False,
               help="Background (autonomous) or interactive (new terminals)")
 @click.option("--dry-run", is_flag=True, help="Show commands without executing")
 @click.option("--worktree/--no-worktree", default=False, help="Create git worktrees for each agent")
 @require_init
-def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: bool, worktree: bool):
+def spawn(count: int, name_prefix: str, agent_cli: str, model: str, background: bool, dry_run: bool, worktree: bool):
     """Spawn AI agents to work on tasks.
 
-    Two modes available:
+    Supports multiple agent CLIs: Claude Code, Codex CLI, Gemini CLI.
+    Auto-detects which CLI is available if not specified.
 
     \b
     INTERACTIVE (default, --interactive or -i):
       Opens new terminal windows for each agent. You interact with each
-      Claude instance normally, but they coordinate via Aqua.
+      agent normally, but they coordinate via Aqua.
       Safer - you can see and approve what each agent does.
 
     \b
     BACKGROUND (--background or -b):
-      Runs agents as background processes using Claude's --print mode
-      with --dangerously-skip-permissions. Fully autonomous but requires
+      Runs agents as background processes. Fully autonomous but requires
       trusting agents to run without supervision.
 
     Examples:
-        aqua spawn 3              # 3 interactive agents in new terminals
-        aqua spawn 2 -b           # 2 background autonomous agents
-        aqua spawn 1 --dry-run    # Show what would be executed
+        aqua spawn 3                    # 3 interactive agents (auto-detect CLI)
+        aqua spawn 2 -b                 # 2 background autonomous agents
+        aqua spawn 2 --cli codex        # Use Codex CLI specifically
+        aqua spawn 1 --dry-run          # Show what would be executed
     """
     import subprocess
     import shutil
 
     project_dir = get_project_dir()
 
-    # Check claude is available
-    claude_path = shutil.which("claude")
-    if not claude_path:
-        console.print("[red]Error:[/red] 'claude' command not found in PATH.")
-        console.print("Install Claude Code: https://claude.ai/code")
+    # Detect or validate agent CLI
+    if agent_cli == "auto":
+        detected = _detect_agent_cli()
+        if not detected:
+            console.print("[red]Error:[/red] No agent CLI found in PATH.")
+            console.print("Install one of:")
+            for name, config in AGENT_CLI_CONFIG.items():
+                console.print(f"  {name}: {config['install_url']}")
+            sys.exit(1)
+        agent_cli = detected
+        console.print(f"[dim]Using {agent_cli} CLI[/dim]")
+
+    cli_config = AGENT_CLI_CONFIG[agent_cli]
+    cli_command = cli_config["command"]
+
+    # Check CLI is available
+    cli_path = shutil.which(cli_command)
+    if not cli_path:
+        console.print(f"[red]Error:[/red] '{cli_command}' command not found in PATH.")
+        console.print(f"Install: {cli_config['install_url']}")
         sys.exit(1)
+
+    # Use default model if not specified
+    if model is None:
+        model = cli_config["default_model"]
 
     spawned = []
 
@@ -2052,19 +2140,17 @@ def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: b
         )
 
         if background:
-            # Background mode: use --print and --dangerously-skip-permissions
-            cmd = [
-                "claude",
-                "--print",
-                "--dangerously-skip-permissions",
-                "--model", model,
-                prompt,
-            ]
+            # Background mode: use CLI-specific autonomous flags
+            cmd = [cli_command] + cli_config["background_args"]
+            if cli_config["model_arg"]:
+                cmd.extend([cli_config["model_arg"], model])
+            cmd.append(prompt)
 
             if dry_run:
                 console.print(f"\n[bold]Agent {agent_name} (background):[/bold]")
                 console.print(f"  Directory: {work_dir}")
-                console.print(f"  Command: claude --print --dangerously-skip-permissions --model {model} '<prompt>'")
+                bg_args = " ".join(cli_config["background_args"])
+                console.print(f"  Command: {cli_command} {bg_args} {cli_config['model_arg']} {model} '<prompt>'")
                 continue
 
             # Spawn as background process
@@ -2094,11 +2180,11 @@ def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: b
                 console.print(f"[red]Error spawning {agent_name}:[/red] {e}")
 
         else:
-            # Interactive mode: open new terminal with claude
+            # Interactive mode: open new terminal with agent CLI
             if dry_run:
                 console.print(f"\n[bold]Agent {agent_name} (interactive):[/bold]")
                 console.print(f"  Directory: {work_dir}")
-                console.print(f"  Opens new terminal with: claude --model {model} '<prompt>'")
+                console.print(f"  Opens new terminal with: {cli_command} {cli_config['model_arg']} {model} '<prompt>'")
                 continue
 
             # Platform-specific terminal opening
@@ -2109,8 +2195,9 @@ def spawn(count: int, name_prefix: str, model: str, background: bool, dry_run: b
                 prompt_file.write_text(prompt)
 
                 # Set AQUA_SESSION_ID so each agent has its own session file
-                # Shell command that sets env, changes dir, and runs claude
-                shell_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && claude --model {model} \"$(cat '{prompt_file}')\""
+                # Build CLI command with model argument
+                model_part = f"{cli_config['model_arg']} {model}" if cli_config['model_arg'] else ""
+                shell_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && {cli_command} {model_part} \"$(cat '{prompt_file}')\""
 
                 script = f'''
 tell application "Terminal"
@@ -2130,10 +2217,12 @@ end tell
 
             elif sys.platform == "linux":
                 # Linux: try common terminal emulators
+                model_part = f"{cli_config['model_arg']} {model}" if cli_config['model_arg'] else ""
+                cli_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && {cli_command} {model_part} '{prompt}'"
                 terminals = [
-                    ["gnome-terminal", "--", "bash", "-c", f"cd '{work_dir}' && claude --model {model} '{prompt}'; exec bash"],
-                    ["xterm", "-e", f"cd '{work_dir}' && claude --model {model} '{prompt}'; bash"],
-                    ["konsole", "-e", f"cd '{work_dir}' && claude --model {model} '{prompt}'"],
+                    ["gnome-terminal", "--", "bash", "-c", f"{cli_cmd}; exec bash"],
+                    ["xterm", "-e", f"{cli_cmd}; bash"],
+                    ["konsole", "-e", cli_cmd],
                 ]
                 opened = False
                 for term_cmd in terminals:
@@ -2180,7 +2269,7 @@ end tell
             console.print("Interactive agents opened in new terminal windows.")
             console.print("Each agent will prompt you before taking actions.")
             console.print()
-            console.print("In each terminal, Claude will:")
+            console.print("In each terminal, the agent will:")
             console.print("  1. Join Aqua with its assigned name")
             console.print("  2. Claim tasks and work on them")
             console.print("  3. Ask for your approval before changes")
