@@ -52,6 +52,23 @@ aqua spawn 3
 aqua watch
 ```
 
+## Let the Agent Do It
+
+After running `aqua setup --all`, you can simply start your AI agent and ask it to plan the project:
+
+```bash
+aqua init
+aqua setup --all
+
+# Start your AI agent
+claude  # or: codex, gemini
+
+# Then ask:
+> "Plan this project and spawn workers to build it"
+```
+
+The agent reads the instructions from CLAUDE.md (or AGENTS.md/GEMINI.md), understands Aqua's capabilities, and handles task breakdown, agent spawning, and coordination autonomously.
+
 ## Features
 
 | Feature | Description |
@@ -68,11 +85,13 @@ aqua watch
 
 ## Supported Agent CLIs
 
-| CLI | Instruction File | Default Model |
-|-----|------------------|---------------|
-| [Claude Code](https://claude.ai/code) | `CLAUDE.md` | sonnet |
-| [Codex CLI](https://github.com/openai/codex-cli) | `AGENTS.md` | o4-mini |
-| [Gemini CLI](https://github.com/google/gemini-cli) | `GEMINI.md` | gemini-2.5-pro |
+| CLI | Instruction File |
+|-----|------------------|
+| [Claude Code](https://claude.ai/code) | `CLAUDE.md` |
+| [Codex CLI](https://github.com/openai/codex-cli) | `AGENTS.md` |
+| [Gemini CLI](https://github.com/google/gemini-cli) | `GEMINI.md` |
+
+Aqua auto-detects which CLI is available when using `aqua spawn`. Each CLI uses its own default model - override with `--model` if needed.
 
 ## Links
 
