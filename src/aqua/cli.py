@@ -64,29 +64,39 @@ def require_init(func):
 
 
 def _get_session_id() -> str:
-    """Get a unique session identifier for this terminal.
+    """Get a unique session identifier for this terminal/agent.
 
-    Uses multiple signals to identify a unique terminal session:
-    1. AQUA_SESSION_ID env var (set by aqua join)
-    2. Terminal TTY device
-    3. Parent process ID (the shell)
+    Uses multiple signals to identify a unique session:
+    1. AQUA_SESSION_ID env var (explicit override)
+    2. AQUA_AGENT_ID env var (agent already knows its ID)
+    3. Terminal TTY device (unique per terminal window)
+    4. Default "default" (single-agent mode for AI agents)
 
-    This allows multiple agents to work in the same directory.
+    Note: We avoid PPID because each subprocess has a different parent.
+    For AI agents running commands, we use a simple "default" session
+    which means one agent per directory. Use AQUA_SESSION_ID or
+    AQUA_AGENT_ID for multi-agent in same directory.
     """
     # Check if we have an explicit session ID
     session_id = os.environ.get("AQUA_SESSION_ID")
     if session_id:
         return session_id
 
-    # Try to get TTY - unique per terminal
+    # If agent ID is in env, use that as session (agent already identified)
+    agent_id = os.environ.get(AQUA_AGENT_ID_VAR)
+    if agent_id:
+        return f"agent_{agent_id}"
+
+    # Try to get TTY - unique per terminal window
     try:
         tty = os.ttyname(0)
         return tty.replace("/", "_")
     except (OSError, AttributeError):
         pass
 
-    # Fall back to parent PID (the shell running commands)
-    return f"ppid_{os.getppid()}"
+    # For AI agents (no TTY), use "default" - one agent per directory
+    # This is the simplest model and works for most cases
+    return "default"
 
 
 def _get_agent_file() -> Path:
