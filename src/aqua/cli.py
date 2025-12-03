@@ -146,9 +146,17 @@ def clear_agent_id() -> None:
         agent_file.unlink()
 
 
-def output_json(data: dict) -> None:
-    """Output data as JSON."""
-    click.echo(json.dumps(data, indent=2, default=str))
+def output_json(data: dict, nl: bool = False) -> None:
+    """Output data as JSON.
+
+    Args:
+        data: Dictionary to output
+        nl: If True, output as newline-delimited JSON (no indent, one line)
+    """
+    if nl:
+        click.echo(json.dumps(data, default=str))
+    else:
+        click.echo(json.dumps(data, indent=2, default=str))
 
 
 # =============================================================================
@@ -1426,6 +1434,119 @@ def log(agent: str, task_id: str, limit: int, as_json: bool):
 
     finally:
         db.close()
+
+
+@main.command()
+@click.option("--agent", help="Filter by agent name")
+@click.option("--task", "task_id", help="Filter by task ID")
+@click.option("-r", "--refresh", default=1, help="Refresh interval in seconds")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON (one event per line)")
+@require_init
+def logs(agent: str, task_id: str, refresh: int, as_json: bool):
+    """Tail event log in real-time (Ctrl+C to exit).
+
+    Like 'tail -f' for agent activity. Great for monitoring spawned agents.
+
+    Examples:
+        aqua logs                    # All activity
+        aqua logs --agent worker-1   # Specific agent
+        aqua logs --json             # Machine-readable
+    """
+    import time
+
+    project_dir = get_project_dir()
+
+    last_event_id = 0
+
+    # Get agent ID from name if provided
+    agent_id = None
+    if agent:
+        db = get_db(project_dir)
+        try:
+            agent_obj = db.get_agent_by_name(agent)
+            if agent_obj:
+                agent_id = agent_obj.id
+            else:
+                console.print(f"[red]Agent '{agent}' not found.[/red]")
+                return
+        finally:
+            db.close()
+
+    if not as_json:
+        console.print(f"[dim]Tailing event log... (Ctrl+C to stop)[/dim]")
+        if agent:
+            console.print(f"[dim]Filtering by agent: {agent}[/dim]")
+        if task_id:
+            console.print(f"[dim]Filtering by task: {task_id}[/dim]")
+        console.print()
+
+    try:
+        while True:
+            db = get_db(project_dir)
+            try:
+                # Get new events since last check
+                events = db.get_events(agent_id=agent_id, task_id=task_id, limit=100)
+
+                # Filter to only new events (events are returned in DESC order)
+                new_events = [e for e in events if e.id > last_event_id]
+
+                if new_events:
+                    # Update last seen ID
+                    last_event_id = max(e.id for e in new_events)
+
+                    # Print in chronological order (oldest first)
+                    for event in reversed(new_events):
+                        if as_json:
+                            output_json(event.to_dict(), nl=True)
+                        else:
+                            time_str = event.timestamp.strftime("%H:%M:%S")
+                            console.print(f"[dim]{time_str}[/dim]", end=" ")
+
+                            # Color-code event types
+                            event_colors = {
+                                "task_completed": "green",
+                                "task_failed": "red",
+                                "task_claimed": "yellow",
+                                "task_created": "blue",
+                                "agent_joined": "cyan",
+                                "agent_left": "magenta",
+                                "leader_elected": "bold yellow",
+                                "file_locked": "dim yellow",
+                                "file_unlocked": "dim green",
+                            }
+                            color = event_colors.get(event.event_type, "white")
+                            console.print(f"[{color}]{event.event_type}[/{color}]", end="")
+
+                            if event.agent_id:
+                                agent_obj = db.get_agent(event.agent_id)
+                                name = agent_obj.name if agent_obj else event.agent_id[:8]
+                                console.print(f" [cyan]{name}[/cyan]", end="")
+
+                            if event.task_id:
+                                task_obj = db.get_task(event.task_id)
+                                title = truncate(task_obj.title, 25) if task_obj else event.task_id[:8]
+                                console.print(f" [dim]task:[/dim]{title}", end="")
+
+                            if event.details:
+                                # Show key details
+                                key_details = []
+                                for k, v in event.details.items():
+                                    if v and k not in ('title',):  # Skip redundant fields
+                                        val = truncate(str(v), 30) if isinstance(v, str) else v
+                                        key_details.append(f"{k}={val}")
+                                if key_details:
+                                    console.print(f" [dim]({', '.join(key_details)})[/dim]", end="")
+
+                            console.print()
+
+            finally:
+                db.close()
+
+            time.sleep(refresh)
+
+    except KeyboardInterrupt:
+        if not as_json:
+            console.print("\n[dim]Log tailing stopped.[/dim]")
 
 
 # =============================================================================
