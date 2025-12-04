@@ -136,10 +136,15 @@ pip install aqua-coord
 Requires Python 3.10+.
 
 ## What's Next
+I believe that as agents become smarter, they will discover ways to use aqua that even I didn't envision. However, I have some immediate plans for features that I think will enrich aqua:
+- A role tag for each agent that is spawned so that the agent knows its responsibilities -- like a code review agent, or a frontend agent which will pick up tasks that it thinks it is best suited to work on.
+- An interview/eval mode where a leader agent can interview/evaluate agents it spawns to ensure the tasks are being picked up by the most capable agent.
+- A planning mode where multiple agents can come together and plan work - like a design review, or a sprint planning 😄
+- Git merge conflict detection and resolution 
+- Web dashboard for visual monitoring (not my highest priority)
 
-- Web dashboard for visual monitoring
-- Git merge conflict detection and resolution
-- Distributed mode with PostgreSQL backend
+### QOL improvements
+If you've used or even seen the gifs where aqua is in action, you'd have noticed some rough edges and poor comprehension from agents that try to use aqua. These hinder effective utilization and at the same time might waste tokens. To that end, I will constantly be using and pushing bug fixes and QOL improvements. Please update as often as you can! 
 
 ## Links
 
