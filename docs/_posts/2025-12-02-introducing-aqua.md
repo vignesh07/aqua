@@ -8,6 +8,8 @@ date: 2025-12-02
 
 Today I'm releasing **Aqua** (Autonomous QUorum of Agents), a lightweight CLI tool for coordinating multiple AI coding agents working on the same codebase.
 
+![Aqua in action]({{ site.baseurl }}/assets/images/aqua-demo.gif)
+
 ## The Problem
 
 AI coding agents like Claude Code, Codex CLI, and Gemini CLI are powerful - but they're designed for single-agent use. When you want to parallelize work across multiple agents, things get messy:
@@ -53,6 +55,14 @@ Each spawned agent automatically:
 4. Locks files before editing
 5. Reports progress periodically
 6. Marks tasks done and claims the next one
+
+## Let the Agent Do It
+
+You can also let the agent handle everything. Just run `aqua setup --all`, start your AI agent, and ask it to plan the project:
+
+![Agent-driven workflow]({{ site.baseurl }}/assets/images/aqua-agent-demo.gif)
+
+The agent reads CLAUDE.md, understands Aqua's capabilities, and handles task breakdown, spawning, and coordination autonomously.
 
 ## Key Features
 
@@ -109,12 +119,12 @@ Aqua uses SQLite with WAL mode for concurrent access. There's no server, no Dock
 ```
 your-project/
   .aqua/
-    aqua.db        # SQLite database
+    aqua.db           # SQLite database
     worker-1.session  # Agent session files
     worker-2.session
-  CLAUDE.md        # Instructions for Claude Code
-  AGENTS.md        # Instructions for Codex CLI
-  GEMINI.md        # Instructions for Gemini CLI
+  CLAUDE.md           # Instructions for Claude Code
+  AGENTS.md           # Instructions for Codex CLI
+  GEMINI.md           # Instructions for Gemini CLI
 ```
 
 ## Install
@@ -135,7 +145,8 @@ Requires Python 3.10+.
 
 - **GitHub**: [github.com/vignesh07/aqua](https://github.com/vignesh07/aqua)
 - **PyPI**: [pypi.org/project/aqua-coord](https://pypi.org/project/aqua-coord/)
+- **Docs**: [vignesh07.github.io/aqua](https://vignesh07.github.io/aqua)
 
 ---
 
-Aqua is open source under the MIT license. Contributions welcome!
+Aqua is open source under the MIT license.

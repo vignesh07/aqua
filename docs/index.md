@@ -11,8 +11,17 @@ title: Aqua - Autonomous QUorum of Agents
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-<!-- Hero GIF: Full workflow demo -->
-![Aqua in action]({{ site.baseurl }}/assets/images/aqua-demo.gif)
+## See It In Action
+
+### Manual Workflow
+Add tasks, spawn agents, and monitor progress:
+
+![Aqua manual demo]({{ site.baseurl }}/assets/images/aqua-demo.gif)
+
+### Agent-Driven Workflow
+Let Claude plan and coordinate everything:
+
+![Aqua agent demo]({{ site.baseurl }}/assets/images/aqua-agent-demo.gif)
 
 ## What is Aqua?
 
@@ -55,9 +64,6 @@ aqua spawn 3
 aqua watch
 ```
 
-<!-- Screenshot: aqua status output -->
-![aqua status]({{ site.baseurl }}/assets/images/aqua-status.png)
-
 ## Let the Agent Do It
 
 After running `aqua setup --all`, you can simply start your AI agent and ask it to plan the project:
@@ -74,9 +80,6 @@ claude  # or: codex, gemini
 ```
 
 The agent reads the instructions from CLAUDE.md (or AGENTS.md/GEMINI.md), understands Aqua's capabilities, and handles task breakdown, agent spawning, and coordination autonomously.
-
-<!-- GIF: aqua watch live dashboard -->
-![aqua watch dashboard]({{ site.baseurl }}/assets/images/aqua-watch.gif)
 
 ## Features
 
