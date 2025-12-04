@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aqua-coord"
-version = "0.2.6"
+version = "0.2.7"
 description = "Autonomous QUorum of Agents - Lightweight coordinator for CLI AI agents"
 readme = "README.md"
 license = "MIT"

@@ -32,6 +32,23 @@ aqua msg "text"      # Send message to all agents
 aqua inbox --unread  # Check for messages
 ```
 
+## Spawning Agents (Important!)
+
+```bash
+# Generic spawn (auto-detects available CLI):
+aqua spawn 2 -b -y
+
+# REQUIRED when testing/comparing specific agent types:
+aqua spawn 2 -b -y --claude           # Only Claude agents
+aqua spawn 2 -b -y --codex            # Only Codex agents
+aqua spawn 2 -b -y --claude --codex   # 1 Claude + 1 Codex (alternating)
+aqua spawn 4 -b -y --claude --codex   # 2 Claude + 2 Codex (alternating)
+```
+
+**If the user asks to test, compare, or use specific agent types (Claude, Codex, Gemini),
+you MUST use the `--claude`, `--codex`, or `--gemini` flags. Without these flags,
+`aqua spawn` will only use whichever single CLI it auto-detects first.**
+
 ## Full Command Reference
 
 ### Core Commands
