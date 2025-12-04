@@ -368,6 +368,48 @@ class Database:
                 blocking.append(dep_task)
         return blocking
 
+    def would_create_cycle(self, task_id: str, depends_on: list[str]) -> list[str] | None:
+        """
+        Check if adding these dependencies would create a circular dependency.
+        Returns the cycle path if a cycle would be created, None otherwise.
+
+        Uses BFS to check if any dependency eventually leads back to task_id.
+        """
+        if not depends_on:
+            return None
+
+        # Build dependency graph from existing tasks
+        all_tasks = self.get_all_tasks()
+        dep_graph: dict[str, list[str]] = {}
+        for task in all_tasks:
+            dep_graph[task.id] = task.depends_on or []
+
+        # Add the proposed dependencies for the new/updated task
+        dep_graph[task_id] = depends_on
+
+        # BFS from each dependency to see if we can reach task_id
+        for start_dep in depends_on:
+            visited: set[str] = set()
+            queue: list[tuple[str, list[str]]] = [(start_dep, [task_id, start_dep])]
+
+            while queue:
+                current, path = queue.pop(0)
+
+                if current == task_id:
+                    # Found a cycle!
+                    return path
+
+                if current in visited:
+                    continue
+                visited.add(current)
+
+                # Follow this task's dependencies
+                for next_dep in dep_graph.get(current, []):
+                    if next_dep not in visited:
+                        queue.append((next_dep, path + [next_dep]))
+
+        return None
+
     def claim_task(
         self, task_id: str, agent_id: str, term: int
     ) -> bool:

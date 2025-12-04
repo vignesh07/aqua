@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-**Aqua** is a lightweight, agent-agnostic coordinator for CLI AI agents. It enables multiple AI agents (Claude Code, Codex CLI, Gemini CLI, or any CLI tool) running in separate terminal sessions to collaborate on tasks within a shared codebase. Built with Claude ❤️
+**Aqua** is a lightweight, agent-agnostic coordinator for CLI AI agents. It enables multiple AI agents (Claude Code, Codex CLI, Gemini CLI, or any CLI tool) running in separate terminal sessions to collaborate on tasks within a shared codebase. Built with Claude.
 
-<!-- TODO: Add screenshot/GIF here showing aqua watch dashboard -->
+![Aqua in action](https://vignesh07.github.io/aqua/assets/images/aqua-demo.gif)
 
 ## Why Aqua?
 
@@ -24,11 +24,12 @@ Aqua solves this by providing:
 ## Features
 
 - **Task Queue**: Priority-based task management with dependencies
+- **Circular Dependency Detection**: Prevents deadlocks by rejecting cyclic task dependencies
 - **File Locking**: Prevent multiple agents from editing the same file
 - **Blocking Messages**: Ask questions and wait for replies from other agents
 - **Live Monitoring**: Real-time dashboard and event stream
 - **Leader Election**: Automatic coordination with one agent assuming leadership
-- **Crash Recovery**: Automatic detection of dead agents and task reassignment
+- **Crash Recovery**: Automatic detection of dead agents and task reassignment (heartbeat-based)
 - **Agent Agnostic**: Works with Claude Code, Codex CLI, Gemini CLI, or any CLI tool
 - **Zero External Dependencies**: Uses SQLite - no Redis, Docker, or external services
 - **JSON Mode**: Full `--json` support and `AQUA_JSON=1` env var for programmatic access
@@ -171,7 +172,7 @@ aqua ask "Should I use Redis or SQLite?" --to @leader --timeout 60
 aqua reply 42 "Use SQLite, it's simpler"
 ```
 
-### Monitoring
+### Monitoring & Recovery
 
 ```bash
 aqua watch                    # Live dashboard (Ctrl+C to exit)
@@ -180,6 +181,8 @@ aqua logs --agent worker-1    # Filter by agent
 aqua logs --json              # Machine-readable output
 aqua log -n 50                # View last 50 events
 aqua doctor                   # Run health checks
+aqua doctor --fix             # Fix issues (recover orphaned tasks)
+aqua recover                  # Recover tasks from dead agents
 ```
 
 ### Setup

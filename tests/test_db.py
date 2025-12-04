@@ -339,3 +339,105 @@ class TestEventLog:
 
         events_b = db.get_events(event_type="event_b")
         assert len(events_b) == 1
+
+
+class TestCircularDependencyDetection:
+    """Tests for circular dependency detection."""
+
+    def test_no_cycle_empty_dependencies(self, db: Database):
+        """Test that empty dependencies return None (no cycle)."""
+        result = db.would_create_cycle("task-a", [])
+        assert result is None
+
+    def test_no_cycle_single_dependency(self, db: Database):
+        """Test no cycle with single dependency on existing task."""
+        # Create task B first
+        task_b = Task(id="task-b", title="Task B", priority=5)
+        db.create_task(task_b)
+
+        # A depends on B - no cycle
+        result = db.would_create_cycle("task-a", ["task-b"])
+        assert result is None
+
+    def test_no_cycle_chain(self, db: Database):
+        """Test no cycle with A→B→C chain."""
+        # Create tasks
+        task_c = Task(id="task-c", title="Task C", priority=5)
+        task_b = Task(id="task-b", title="Task B", priority=5, depends_on=["task-c"])
+        db.create_task(task_c)
+        db.create_task(task_b)
+
+        # A depends on B (chain: A→B→C) - no cycle
+        result = db.would_create_cycle("task-a", ["task-b"])
+        assert result is None
+
+    def test_self_cycle(self, db: Database):
+        """Test detection of self-referencing dependency (A→A)."""
+        result = db.would_create_cycle("task-a", ["task-a"])
+        assert result is not None
+        assert "task-a" in result
+
+    def test_simple_cycle_two_tasks(self, db: Database):
+        """Test detection of simple cycle (A→B→A)."""
+        # Create task B that depends on A
+        task_b = Task(id="task-b", title="Task B", priority=5, depends_on=["task-a"])
+        db.create_task(task_b)
+
+        # Now try to make A depend on B - creates cycle A→B→A
+        result = db.would_create_cycle("task-a", ["task-b"])
+        assert result is not None
+        assert "task-a" in result
+        assert "task-b" in result
+
+    def test_complex_cycle_three_tasks(self, db: Database):
+        """Test detection of cycle with three tasks (A→B→C→A)."""
+        # Create tasks: C→A, B→C
+        task_c = Task(id="task-c", title="Task C", priority=5, depends_on=["task-a"])
+        task_b = Task(id="task-b", title="Task B", priority=5, depends_on=["task-c"])
+        db.create_task(task_c)
+        db.create_task(task_b)
+
+        # Now try to make A depend on B - creates cycle A→B→C→A
+        result = db.would_create_cycle("task-a", ["task-b"])
+        assert result is not None
+        assert "task-a" in result
+        assert "task-b" in result
+        assert "task-c" in result
+
+    def test_no_cycle_independent_chains(self, db: Database):
+        """Test no false positive with independent chains (A→B, C→D)."""
+        # Create independent chain C→D
+        task_d = Task(id="task-d", title="Task D", priority=5)
+        task_c = Task(id="task-c", title="Task C", priority=5, depends_on=["task-d"])
+        db.create_task(task_d)
+        db.create_task(task_c)
+
+        # Create B for A to depend on
+        task_b = Task(id="task-b", title="Task B", priority=5)
+        db.create_task(task_b)
+
+        # A→B should not create a cycle (C→D is separate)
+        result = db.would_create_cycle("task-a", ["task-b"])
+        assert result is None
+
+    def test_cycle_with_multiple_dependencies(self, db: Database):
+        """Test cycle detection when task has multiple dependencies."""
+        # Create B→A
+        task_b = Task(id="task-b", title="Task B", priority=5, depends_on=["task-a"])
+        db.create_task(task_b)
+
+        # Create C (independent)
+        task_c = Task(id="task-c", title="Task C", priority=5)
+        db.create_task(task_c)
+
+        # A depends on both B and C - B creates cycle, C doesn't
+        result = db.would_create_cycle("task-a", ["task-b", "task-c"])
+        assert result is not None
+        assert "task-a" in result
+        assert "task-b" in result
+
+    def test_dependency_on_nonexistent_task(self, db: Database):
+        """Test that depending on non-existent task doesn't cause error."""
+        # A depends on non-existent task - should not cause cycle
+        result = db.would_create_cycle("task-a", ["nonexistent"])
+        assert result is None

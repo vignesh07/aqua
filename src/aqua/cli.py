@@ -371,8 +371,23 @@ def add(title: str, description: str, priority: int, tag: tuple, context: str,
             else:
                 console.print(f"[yellow]Warning:[/yellow] No task found matching '{after}'")
 
+        # Generate task ID early so we can check for cycles
+        task_id = generate_short_id()
+
+        # Check for circular dependencies
+        if dep_ids:
+            cycle = db.would_create_cycle(task_id, dep_ids)
+            if cycle:
+                cycle_str = " -> ".join(cycle)
+                if as_json:
+                    output_json({"error": "circular_dependency", "cycle": cycle})
+                else:
+                    console.print(f"[red]Error:[/red] Circular dependency detected!")
+                    console.print(f"  [dim]Cycle: {cycle_str}[/dim]")
+                sys.exit(1)
+
         task = Task(
-            id=generate_short_id(),
+            id=task_id,
             title=title,
             description=description,
             priority=max(1, min(10, priority)),
