@@ -2360,7 +2360,8 @@ AGENT_CLI_CONFIG = {
         "command": "codex",
         "install_url": "https://github.com/openai/codex-cli",
         # Use 'exec' subcommand for non-interactive + --full-auto for sandboxed auto-approval
-        "background_args": ["exec", "--full-auto"],
+        # --skip-git-repo-check bypasses the trusted directory requirement
+        "background_args": ["exec", "--full-auto", "--skip-git-repo-check"],
         "model_arg": "--model",
         "prompt_style": "file",  # Requires prompt to be in a file
     },
