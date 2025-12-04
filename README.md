@@ -28,8 +28,8 @@ Aqua solves this by providing:
 - **File Locking**: Prevent multiple agents from editing the same file
 - **Blocking Messages**: Ask questions and wait for replies from other agents
 - **Live Monitoring**: Real-time dashboard and event stream
-- **Leader Election**: Automatic coordination with one agent assuming leadership
-- **Crash Recovery**: Automatic detection of dead agents and task reassignment (heartbeat-based)
+- **Leader Election**: First agent becomes leader; leadership is heartbeat-integrated
+- **Crash Recovery**: Automatic detection of dead agents (5min heartbeat timeout) and task reassignment
 - **Agent Agnostic**: Works with Claude Code, Codex CLI, Gemini CLI, or any CLI tool
 - **Zero External Dependencies**: Uses SQLite - no Redis, Docker, or external services
 - **JSON Mode**: Full `--json` support and `AQUA_JSON=1` env var for programmatic access
@@ -274,9 +274,9 @@ while True:
                           │
 ┌─────────────────────────▼───────────────────────────────────┐
 │                    Coordinator Core                          │
-│  • Leader Election (lease-based with fencing tokens)        │
-│  • Task Scheduler (priority + dependencies)                 │
-│  • Crash Recovery (heartbeat + PID monitoring)              │
+│  • Leader Election (heartbeat-integrated with fencing)      │
+│  • Task Scheduler (priority + dependencies + cycles)        │
+│  • Crash Recovery (5min heartbeat + PID monitoring)         │
 └─────────────────────────┬───────────────────────────────────┘
                           │
 ┌─────────────────────────▼───────────────────────────────────┐

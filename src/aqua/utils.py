@@ -3,7 +3,7 @@
 import os
 import random
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Adjectives and nouns for generating memorable agent names
 ADJECTIVES = [
@@ -47,19 +47,36 @@ def get_current_pid() -> int:
     return os.getpid()
 
 
+def utc_now() -> datetime:
+    """Get current UTC time as timezone-aware datetime.
+
+    This is the recommended replacement for datetime.utcnow() which is
+    deprecated in Python 3.12+.
+    """
+    return datetime.now(timezone.utc)
+
+
 def now_iso() -> str:
     """Get current UTC time as ISO8601 string."""
-    return datetime.utcnow().isoformat()
+    return utc_now().isoformat()
 
 
 def parse_iso(iso_string: str) -> datetime:
-    """Parse ISO8601 string to datetime."""
+    """Parse ISO8601 string to datetime.
+
+    Note: Returns timezone-naive datetime for compatibility with existing
+    database storage. Internal comparisons should handle this.
+    """
     return datetime.fromisoformat(iso_string)
 
 
 def format_time_ago(dt: datetime) -> str:
     """Format a datetime as 'X ago' relative to now."""
-    now = datetime.utcnow()
+    # Handle both timezone-aware and naive datetimes
+    now = utc_now()
+    if dt.tzinfo is None:
+        # Naive datetime - assume UTC
+        now = now.replace(tzinfo=None)
     delta = now - dt
 
     seconds = int(delta.total_seconds())

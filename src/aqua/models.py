@@ -2,8 +2,17 @@
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
+
+
+def _utc_now_naive() -> datetime:
+    """Get current UTC time as naive datetime (no timezone info).
+
+    This is used for default field values to maintain compatibility with
+    existing database storage which uses naive datetime strings.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class AgentStatus(Enum):
@@ -38,8 +47,8 @@ class Agent:
     agent_type: AgentType = AgentType.GENERIC
     pid: int | None = None
     status: AgentStatus = AgentStatus.ACTIVE
-    last_heartbeat_at: datetime = field(default_factory=datetime.utcnow)
-    registered_at: datetime = field(default_factory=datetime.utcnow)
+    last_heartbeat_at: datetime = field(default_factory=_utc_now_naive)
+    registered_at: datetime = field(default_factory=_utc_now_naive)
     current_task_id: str | None = None
     capabilities: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
@@ -93,8 +102,8 @@ class Task:
     created_by: str | None = None
     claimed_by: str | None = None
     claim_term: int | None = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utc_now_naive)
+    updated_at: datetime = field(default_factory=_utc_now_naive)
     claimed_at: datetime | None = None
     completed_at: datetime | None = None
     result: str | None = None
@@ -166,7 +175,7 @@ class Message:
     to_agent: str | None  # None = broadcast
     content: str
     message_type: str = "chat"  # "chat", "question", "answer"
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=_utc_now_naive)
     read_at: datetime | None = None
     reply_to: int | None = None  # ID of message this is replying to
 
@@ -227,7 +236,7 @@ class Leader:
 
     def is_expired(self) -> bool:
         """Check if the leader's lease has expired."""
-        return datetime.utcnow() > self.lease_expires_at
+        return _utc_now_naive() > self.lease_expires_at
 
 
 @dataclass

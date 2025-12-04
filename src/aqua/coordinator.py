@@ -4,7 +4,12 @@ from datetime import datetime, timedelta
 
 from aqua.db import Database
 from aqua.models import Agent, AgentStatus, Task, TaskStatus
-from aqua.utils import process_exists
+from aqua.utils import process_exists, utc_now
+
+
+def _utc_now_naive():
+    """Get current UTC time as naive datetime for comparisons with DB values."""
+    return utc_now().replace(tzinfo=None)
 
 # Configuration defaults
 # 5 minutes - LLM operations can take several minutes
@@ -101,7 +106,7 @@ class Coordinator:
         Detect crashed agents and release their tasks.
         Returns list of recovered agent IDs.
         """
-        now = datetime.utcnow()
+        now = _utc_now_naive()
         threshold = now - self.dead_threshold
         recovered = []
 
@@ -157,7 +162,7 @@ class Coordinator:
         Recover tasks that have been claimed too long without completion.
         Returns count of recovered tasks.
         """
-        now = datetime.utcnow()
+        now = _utc_now_naive()
         threshold = now - self.claim_timeout
 
         # Find stale claimed tasks

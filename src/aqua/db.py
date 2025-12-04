@@ -4,11 +4,17 @@ import json
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from aqua.models import Agent, AgentStatus, Event, Leader, Message, Task, TaskStatus
+from aqua.utils import utc_now
+
+
+def _utc_now_naive():
+    """Get current UTC time as naive datetime for database storage."""
+    return utc_now().replace(tzinfo=None)
 
 # Schema version for migrations
 SCHEMA_VERSION = 4
@@ -180,7 +186,7 @@ class Database:
 
     def create_agent(self, agent: Agent) -> Agent:
         """Create a new agent."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         self.conn.execute(
             """
             INSERT INTO agents (id, name, agent_type, pid, status, last_heartbeat_at,
@@ -231,12 +237,27 @@ class Database:
         return [Agent.from_row(dict(row)) for row in cursor.fetchall()]
 
     def update_heartbeat(self, agent_id: str) -> None:
-        """Update an agent's heartbeat timestamp."""
-        now = datetime.utcnow().isoformat()
+        """Update an agent's heartbeat timestamp and renew leader lease if leader."""
+        from datetime import timedelta
+
+        now = _utc_now_naive()
+        now_iso = now.isoformat()
+
+        # Update agent heartbeat
         self.conn.execute(
             "UPDATE agents SET last_heartbeat_at = ? WHERE id = ?",
-            (now, agent_id)
+            (now_iso, agent_id)
         )
+
+        # If this agent is the leader, renew their lease
+        # Use 5 minute lease (matching dead threshold)
+        leader = self.get_leader()
+        if leader and leader.agent_id == agent_id:
+            new_lease = (now + timedelta(seconds=300)).isoformat()
+            self.conn.execute(
+                "UPDATE leader SET lease_expires_at = ? WHERE id = 1 AND agent_id = ?",
+                (new_lease, agent_id)
+            )
 
     def update_agent_status(self, agent_id: str, status: AgentStatus) -> None:
         """Update an agent's status."""
@@ -263,7 +284,7 @@ class Database:
 
     def create_task(self, task: Task) -> Task:
         """Create a new task."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         self.conn.execute(
             """
             INSERT INTO tasks (id, title, description, status, priority, created_by,
@@ -414,7 +435,7 @@ class Database:
         self, task_id: str, agent_id: str, term: int
     ) -> bool:
         """Atomically claim a task. Returns True if successful."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         cursor = self.conn.execute(
             """
             UPDATE tasks
@@ -433,7 +454,7 @@ class Database:
         self, task_id: str, agent_id: str, result: str | None = None
     ) -> bool:
         """Mark a task as completed."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         cursor = self.conn.execute(
             """
             UPDATE tasks
@@ -456,7 +477,7 @@ class Database:
         self, task_id: str, agent_id: str, error: str
     ) -> bool:
         """Mark a task as failed."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         cursor = self.conn.execute(
             """
             UPDATE tasks
@@ -478,7 +499,7 @@ class Database:
 
     def abandon_task(self, task_id: str, reason: str = "abandoned") -> bool:
         """Mark a task as abandoned (e.g., agent died)."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         cursor = self.conn.execute(
             """
             UPDATE tasks
@@ -495,7 +516,7 @@ class Database:
 
     def requeue_abandoned_tasks(self) -> int:
         """Move abandoned tasks back to pending if under retry limit."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         cursor = self.conn.execute(
             """
             UPDATE tasks
@@ -508,7 +529,7 @@ class Database:
 
     def update_task_progress(self, task_id: str, context: str) -> bool:
         """Update task progress/context."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         cursor = self.conn.execute(
             """
             UPDATE tasks SET context = ?, updated_at = ? WHERE id = ?
@@ -544,14 +565,14 @@ class Database:
         leader = self.get_leader()
         return leader.term if leader else 0
 
-    def try_become_leader(self, agent_id: str, lease_seconds: int = 30) -> tuple[bool, int]:
+    def try_become_leader(self, agent_id: str, lease_seconds: int = 300) -> tuple[bool, int]:
         """
         Attempt to become or remain leader.
         Returns (is_leader, term).
         """
         from datetime import timedelta
 
-        now = datetime.utcnow()
+        now = _utc_now_naive()
         new_lease_expires = (now + timedelta(seconds=lease_seconds)).isoformat()
         now_iso = now.isoformat()
 
@@ -627,7 +648,7 @@ class Database:
         reply_to: int | None = None,
     ) -> Message:
         """Create a new message."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         cursor = self.conn.execute(
             """
             INSERT INTO messages (from_agent, to_agent, content, message_type, created_at, reply_to)
@@ -689,7 +710,7 @@ class Database:
         """Mark messages as read."""
         if not message_ids:
             return 0
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         placeholders = ",".join("?" * len(message_ids))
         cursor = self.conn.execute(
             f"""
@@ -712,7 +733,7 @@ class Database:
         details: dict | None = None,
     ) -> None:
         """Log an event."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         self.conn.execute(
             """
             INSERT INTO events (timestamp, event_type, agent_id, task_id, details)
@@ -754,7 +775,7 @@ class Database:
 
     def lock_file(self, file_path: str, agent_id: str) -> bool:
         """Lock a file for exclusive access. Returns True if successful."""
-        now = datetime.utcnow().isoformat()
+        now = _utc_now_naive().isoformat()
         try:
             self.conn.execute(
                 """

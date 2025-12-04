@@ -24,7 +24,14 @@ from aqua.utils import (
     get_current_pid,
     process_exists,
     truncate,
+    utc_now,
 )
+
+
+def _utc_now_naive():
+    """Get current UTC time as naive datetime for comparisons with DB values."""
+    return utc_now().replace(tzinfo=None)
+
 
 console = Console()
 
@@ -264,9 +271,23 @@ def status(as_json: bool):
         if leader:
             leader_agent = db.get_agent(leader.agent_id)
             leader_name = leader_agent.name if leader_agent else leader.agent_id
-            expired = leader.is_expired()
-            status_str = "[red]EXPIRED[/red]" if expired else f"term {leader.term}"
-            console.print(f"\n[bold]Leader:[/bold] {leader_name} ({status_str}, elected {format_time_ago(leader.elected_at)})")
+
+            # Check leader status based on agent liveness, not just lease
+            if leader_agent:
+                # Agent exists - check if alive based on heartbeat
+                from aqua.coordinator import AGENT_DEAD_THRESHOLD_SECONDS
+                from datetime import timedelta
+                heartbeat_age = _utc_now_naive() - leader_agent.last_heartbeat_at
+                is_alive = heartbeat_age < timedelta(seconds=AGENT_DEAD_THRESHOLD_SECONDS)
+                if is_alive:
+                    status_str = f"[green]active[/green], term {leader.term}"
+                else:
+                    status_str = f"[red]dead[/red] (no heartbeat for {format_time_ago(leader_agent.last_heartbeat_at)})"
+            else:
+                # Agent was deleted but leader record remains
+                status_str = "[yellow]unknown[/yellow] (agent not found)"
+
+            console.print(f"\n[bold]Leader:[/bold] {leader_name} ({status_str})")
         else:
             console.print("\n[bold]Leader:[/bold] [dim]None[/dim]")
 
@@ -1570,18 +1591,31 @@ def doctor(as_json: bool, fix: bool):
                 console.print("[red]✗[/red] Schema not initialized")
             issues.append("schema")
 
-        # Leader check
+        # Leader check - based on agent heartbeat liveness
+        from datetime import timedelta
+        from aqua.coordinator import AGENT_DEAD_THRESHOLD_SECONDS
+
         leader = db.get_leader()
         if leader:
-            if leader.is_expired():
-                checks["leader"] = "expired"
-                if not as_json:
-                    console.print("[yellow]![/yellow] Leader lease expired")
-                issues.append("leader_expired")
+            leader_agent = db.get_agent(leader.agent_id)
+            if leader_agent:
+                # Check leader agent's heartbeat
+                heartbeat_age = _utc_now_naive() - leader_agent.last_heartbeat_at
+                is_alive = heartbeat_age < timedelta(seconds=AGENT_DEAD_THRESHOLD_SECONDS)
+                if is_alive:
+                    checks["leader"] = "ok"
+                    if not as_json:
+                        console.print(f"[green]✓[/green] Leader elected ({leader_agent.name})")
+                else:
+                    checks["leader"] = "dead"
+                    if not as_json:
+                        console.print(f"[yellow]![/yellow] Leader ({leader_agent.name}) has no recent heartbeat")
+                    issues.append("leader_dead")
             else:
-                checks["leader"] = "ok"
+                checks["leader"] = "orphaned"
                 if not as_json:
-                    console.print("[green]✓[/green] Leader elected")
+                    console.print("[yellow]![/yellow] Leader agent not found (orphaned record)")
+                issues.append("leader_orphaned")
         else:
             checks["leader"] = "none"
             if not as_json:
@@ -1590,8 +1624,7 @@ def doctor(as_json: bool, fix: bool):
         # Agent heartbeat check
         agents = db.get_all_agents(status=AgentStatus.ACTIVE)
         stale_agents = []
-        from datetime import timedelta
-        threshold = datetime.utcnow() - timedelta(seconds=60)
+        threshold = _utc_now_naive() - timedelta(seconds=60)
 
         for agent in agents:
             if agent.last_heartbeat_at < threshold:
@@ -1614,7 +1647,7 @@ def doctor(as_json: bool, fix: bool):
         # Stuck tasks check
         tasks = db.get_all_tasks(status=TaskStatus.CLAIMED)
         stuck_tasks = []
-        claim_threshold = datetime.utcnow() - timedelta(minutes=30)
+        claim_threshold = _utc_now_naive() - timedelta(minutes=30)
 
         for task in tasks:
             if task.claimed_at and task.claimed_at < claim_threshold:
