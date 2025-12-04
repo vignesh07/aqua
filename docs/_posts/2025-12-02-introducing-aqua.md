@@ -136,8 +136,10 @@ pip install aqua-coord
 Requires Python 3.10+.
 
 ## What's Next
+I tried getting Cursor and other IDE agents to play nice with these CLI agents, but I couldn't successfully do it. This IME will be the biggest unlock, so that's what I'll be working on actively. 
+
 I believe that as agents become smarter, they will discover ways to use aqua that even I didn't envision. However, I have some immediate plans for features that I think will enrich aqua:
-- A role tag for each agent that is spawned so that the agent knows its responsibilities -- like a code review agent, or a frontend agent which will pick up tasks that it thinks it is best suited to work on.
+- A role tag for each agent that is spawned so that the agent knows its responsibilities -- like a code review agent, or a frontend agent which will pick up tasks that it thinks it is best suited to work o
 - An interview/eval mode where a leader agent can interview/evaluate agents it spawns to ensure the tasks are being picked up by the most capable agent.
 - A planning mode where multiple agents can come together and plan work - like a design review, or a sprint planning 😄
 - Git merge conflict detection and resolution 
