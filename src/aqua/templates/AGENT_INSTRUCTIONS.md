@@ -111,6 +111,10 @@ aqua spawn 3 -b --claude --codex      # 2 Claude + 1 Codex
 aqua spawn 6 -b --claude --codex --gemini  # 2 of each
 ```
 
+**IMPORTANT**: When you need specific agent types (e.g., comparing Claude vs Codex,
+or testing a particular CLI), you MUST use `--claude`, `--codex`, or `--gemini` flags.
+Without these flags, `aqua spawn` auto-detects and uses whichever CLI is available.
+
 **Round-robin**: When multiple CLI flags are specified, agents are assigned in
 rotation. `aqua spawn 5 --claude --codex` creates: Claude, Codex, Claude, Codex, Claude.
 
