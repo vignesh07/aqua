@@ -2354,6 +2354,7 @@ AGENT_CLI_CONFIG = {
         "install_url": "https://claude.ai/code",
         "background_args": ["--print", "--dangerously-skip-permissions"],
         "model_arg": "--model",
+        "prompt_style": "inline",  # Accepts prompt as final argument
     },
     "codex": {
         "command": "codex",
@@ -2361,12 +2362,14 @@ AGENT_CLI_CONFIG = {
         # Use 'exec' subcommand for non-interactive + --full-auto for sandboxed auto-approval
         "background_args": ["exec", "--full-auto"],
         "model_arg": "--model",
+        "prompt_style": "file",  # Requires prompt to be in a file
     },
     "gemini": {
         "command": "gemini",
         "install_url": "https://github.com/google/gemini-cli",
         "background_args": [],  # TBD - adjust based on actual CLI
         "model_arg": "--model",
+        "prompt_style": "inline",  # Accepts prompt as final argument
     },
 }
 
@@ -2519,14 +2522,27 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
             cmd = [cli_command] + cli_config["background_args"]
             if model and cli_config["model_arg"]:
                 cmd.extend([cli_config["model_arg"], model])
-            cmd.append(prompt)
+
+            # Handle prompt based on CLI's prompt style
+            prompt_file = None
+            if cli_config.get("prompt_style") == "file":
+                # Write prompt to a file for CLIs that require file input (e.g., Codex)
+                prompt_file = project_dir / ".aqua" / f"{agent_name}.prompt.md"
+                prompt_file.write_text(prompt)
+                cmd.append(str(prompt_file))
+            else:
+                # Inline prompt for CLIs that accept it (e.g., Claude)
+                cmd.append(prompt)
 
             if dry_run:
                 console.print(f"\n[bold]Agent {agent_name} (background, {cli_name}):[/bold]")
                 console.print(f"  Directory: {work_dir}")
                 bg_args = " ".join(cli_config["background_args"])
                 model_part = f" {cli_config['model_arg']} {model}" if model else ""
-                console.print(f"  Command: {cli_command} {bg_args}{model_part} '<prompt>'")
+                if prompt_file:
+                    console.print(f"  Command: {cli_command} {bg_args}{model_part} {prompt_file}")
+                else:
+                    console.print(f"  Command: {cli_command} {bg_args}{model_part} '<prompt>'")
                 continue
 
             # Spawn as background process
