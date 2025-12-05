@@ -102,6 +102,81 @@ aqua spawn 4 --assign-roles -b
 # Each agent claims tasks matching their role first
 ```
 
+## Long-Running Projects (Serialize + Loop)
+
+For projects that exceed a single agent's context window, Aqua provides **serialize** and **loop** mode to manage context automatically.
+
+### The Problem
+
+AI agents have limited context windows. On multi-day projects with 10-20 tasks, the agent's context fills up with implementation details, causing mistakes and forgotten decisions.
+
+### The Solution
+
+1. **Serialize** tasks into a linear chain with checkpoints
+2. **Loop** mode respawns fresh agents at each checkpoint
+
+```bash
+# 1. Add your tasks
+aqua add "Set up project structure" -p 10
+aqua add "Create data models" -p 9
+aqua add "Build API endpoints" -p 8
+aqua add "Write tests" -p 7
+
+# 2. Serialize into linear sequence with checkpoints
+aqua serialize
+
+# 3. Run with loop mode (single agent, auto-respawn)
+aqua spawn 1 -b --loop
+```
+
+### How It Works
+
+`aqua serialize` creates a linear chain:
+```
+Task1 → Checkpoint → Task2 → Checkpoint → Task3 → Checkpoint → ...
+```
+
+When an agent completes a task and claims a checkpoint:
+1. Agent runs `aqua done` for the checkpoint
+2. Agent exits the session
+3. Loop mode detects the exit and respawns a fresh agent
+4. Fresh agent has full context window (200k tokens)
+5. Agent runs `aqua refresh` to restore context from database
+
+### Important Constraints
+
+- **Single agent only**: `--loop` requires `count=1` because serialized tasks form a linear chain. Only one task is claimable at any time.
+- **Sequential execution**: Tasks run one at a time with checkpoints between them
+- **Context in database**: Task summaries survive in SQLite, restored via `aqua refresh`
+
+### Serialize Options
+
+```bash
+aqua serialize                  # Checkpoint after every task
+aqua serialize --every 2        # Checkpoint every 2 tasks
+aqua serialize --dry-run        # Preview without making changes
+```
+
+### Adding Checkpoints to Individual Tasks
+
+```bash
+aqua add "Complex refactoring task" --checkpoint
+```
+
+### When to Use
+
+✅ **Use serialize + loop for:**
+- Multi-day projects with many sequential tasks
+- Projects where context accumulation causes issues
+- Single-agent workflows that need fresh context
+
+❌ **Don't use for:**
+- Parallel work (multiple agents on independent tasks)
+- Short projects that fit in one context window
+- Tasks that don't have a natural sequence
+
+For parallel work, use regular `aqua spawn N` without `--loop`.
+
 ## Installation
 
 ```bash
@@ -229,8 +304,17 @@ aqua spawn 3 \
   --roles fe,be,test \      # Comma-separated roles
   --assign-roles \          # Auto-assign predefined roles
   -b \                      # Background mode (autonomous)
+  --loop \                  # Respawn on checkpoint exit (requires -b, count=1)
   --worktree               # Each agent gets own git worktree
 ```
+
+### Serialize (Long-Running Projects)
+
+| Command | Description |
+|---------|-------------|
+| `aqua serialize` | Convert tasks to linear chain with checkpoints |
+| `aqua serialize --every N` | Insert checkpoint every N tasks |
+| `aqua serialize --dry-run` | Preview without making changes |
 
 ### File Locking
 

@@ -91,6 +91,8 @@ The agent reads the instructions from CLAUDE.md (or AGENTS.md/GEMINI.md), unders
 | **Live Monitoring** | Real-time dashboard and event stream |
 | **Leader Election** | Automatic coordination with one agent assuming leadership |
 | **Crash Recovery** | Automatic detection of dead agents and task reassignment |
+| **Agent Roles** | Spawn specialized agents (frontend, backend, reviewer) |
+| **Serialize + Loop** | Long-running projects with automatic context management |
 | **Agent Agnostic** | Works with Claude Code, Codex CLI, Gemini CLI, or any CLI tool |
 | **Zero Dependencies** | Uses SQLite - no Redis, Docker, or external services |
 | **JSON Mode** | Full `--json` support and `AQUA_JSON=1` env var |
