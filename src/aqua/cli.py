@@ -2854,6 +2854,16 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
         console.print("Loop mode respawns agents automatically, which only works in background.")
         sys.exit(1)
 
+    # Validate --loop only works with single agent (serialized tasks are linear)
+    if loop and count > 1:
+        console.print("[red]Error:[/red] --loop only supports a single agent (count=1).")
+        console.print()
+        console.print("Serialized tasks form a linear chain where only one task is claimable")
+        console.print("at a time. Multiple agents would have nothing to work on in parallel.")
+        console.print()
+        console.print("Use: [cyan]aqua spawn 1 -b --loop[/cyan]")
+        sys.exit(1)
+
     # Build list of CLIs to use (round-robin)
     cli_list = []
     if use_claude:
