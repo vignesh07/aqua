@@ -3265,8 +3265,13 @@ end tell
                         fatal_error = check_logs_for_errors(log_files)
                         if fatal_error:
                             console.print()
-                            console.print(f"[red]Fatal error detected:[/red] {fatal_error}")
-                            console.print("[dim]Check agent logs for details. Stopping loop.[/dim]")
+                            console.print(Panel(
+                                f"[bold red]{fatal_error}[/bold red]\n\n"
+                                "The agent cannot continue due to this error.\n"
+                                "Please resolve the issue and try again.",
+                                title="[red]Agent Error[/red]",
+                                border_style="red"
+                            ))
                             break
 
                         # Check if agent exited too quickly (likely crashed)
@@ -3274,10 +3279,16 @@ end tell
                             consecutive_failures += 1
                             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                                 console.print()
-                                console.print(f"[red]Agents exiting too quickly[/red] ({consecutive_failures} consecutive fast exits)")
-                                console.print("[dim]Check agent logs for errors. Stopping loop.[/dim]")
-                                for lf in log_files:
-                                    console.print(f"  tail -f {lf}")
+                                console.print(Panel(
+                                    f"Agents exited {consecutive_failures} times in a row without making progress.\n\n"
+                                    "This usually means:\n"
+                                    "  • API authentication issues\n"
+                                    "  • Network connectivity problems\n"
+                                    "  • Agent CLI not installed correctly\n\n"
+                                    f"Check logs: {log_files[0] if log_files else 'N/A'}",
+                                    title="[red]Agents Failing Repeatedly[/red]",
+                                    border_style="red"
+                                ))
                                 break
                         else:
                             consecutive_failures = 0
