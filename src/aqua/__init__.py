@@ -4,7 +4,7 @@ Aqua - Autonomous QUorum of Agents
 A lightweight, agent-agnostic coordinator for CLI AI agents.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __author__ = "Vignesh"
 
 from aqua.models import Agent, AgentStatus, AgentType, Message, Task, TaskStatus
