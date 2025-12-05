@@ -3255,6 +3255,23 @@ end tell
                 last_completed_count = 0
                 MAX_CONSECUTIVE_FAILURES = 3
 
+                # Cleanup function to kill agents on unexpected exit
+                def cleanup_agents():
+                    for agent in bg_agents:
+                        pid = agent.get("pid")
+                        if pid and process_exists(pid):
+                            try:
+                                os.kill(pid, 15)  # SIGTERM
+                            except (ProcessLookupError, OSError):
+                                pass
+
+                # Register cleanup for unexpected exits
+                import atexit
+                import signal
+                atexit.register(cleanup_agents)
+                original_sigterm = signal.signal(signal.SIGTERM, lambda s, f: (cleanup_agents(), sys.exit(0)))
+                original_sighup = signal.signal(signal.SIGHUP, lambda s, f: (cleanup_agents(), sys.exit(0)))
+
                 try:
                     while True:
                         # Wait for all background agents to exit
@@ -3403,6 +3420,11 @@ end tell
                                 console.print(f"[dim]Stopped {agent['name']}[/dim]")
                             except ProcessLookupError:
                                 pass
+                finally:
+                    # Unregister cleanup handlers (we've already cleaned up or exited normally)
+                    atexit.unregister(cleanup_agents)
+                    signal.signal(signal.SIGTERM, original_sigterm)
+                    signal.signal(signal.SIGHUP, original_sighup)
 
         if int_agents:
             console.print("Interactive agents opened in new terminal windows.")
