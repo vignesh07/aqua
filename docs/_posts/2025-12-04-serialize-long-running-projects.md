@@ -132,6 +132,8 @@ The checkpoint becomes a signal for the agent to stop. Aqua watches for the exit
 
 ## The Final Design
 
+![Serialize in action]({{ site.baseurl }}/assets/images/serialize.png)
+
 ### 1. Serialize Creates the Plan
 
 ```bash
