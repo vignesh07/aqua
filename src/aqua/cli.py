@@ -38,6 +38,9 @@ console = Console()
 # Environment variable for storing agent ID (persists across commands in same shell)
 AQUA_AGENT_ID_VAR = "AQUA_AGENT_ID"
 
+# Special tag for checkpoint tasks (used by serialize command)
+CHECKPOINT_TAG = "__checkpoint__"
+
 
 def get_project_dir() -> Path:
     """Get the project directory (containing .aqua)."""
@@ -363,10 +366,11 @@ def status(as_json: bool):
 @click.option("--context", help="Additional context")
 @click.option("--depends-on", multiple=True, help="Task ID this depends on (can be repeated)")
 @click.option("--after", help="Task title this depends on (fuzzy match)")
+@click.option("--checkpoint", is_flag=True, help="Add a checkpoint task after this one")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
 def add(title: str, description: str, priority: int, tag: tuple, context: str,
-        depends_on: tuple, after: str, as_json: bool):
+        depends_on: tuple, after: str, checkpoint: bool, as_json: bool):
     """Add a new task.
 
     Examples:
@@ -421,12 +425,175 @@ def add(title: str, description: str, priority: int, tag: tuple, context: str,
 
         db.create_task(task)
 
+        checkpoint_task = None
+        if checkpoint:
+            # Create checkpoint task that depends on this one
+            checkpoint_task = Task(
+                id=generate_short_id(),
+                title="[Checkpoint] Clear and continue",
+                tags=[CHECKPOINT_TAG],
+                depends_on=[task.id],
+                priority=task.priority,  # Same priority as parent task
+                created_by=agent_id,
+            )
+            db.create_task(checkpoint_task)
+
         if as_json:
-            output_json(task.to_dict())
+            result = task.to_dict()
+            if checkpoint_task:
+                result["checkpoint"] = checkpoint_task.to_dict()
+            output_json(result)
         else:
             console.print(f"[green]✓[/green] Created task [cyan]{task.id}[/cyan]: {title}")
             if dep_ids:
                 console.print(f"  [dim]Depends on: {', '.join(dep_ids)}[/dim]")
+            if checkpoint_task:
+                console.print(f"[green]✓[/green] Created checkpoint [yellow]{checkpoint_task.id}[/yellow] after task")
+
+    finally:
+        db.close()
+
+
+@main.command()
+@click.option("--every", default=1, type=int, help="Insert checkpoint every N tasks (default: 1)")
+@click.option("--dry-run", is_flag=True, help="Show what would be created without doing it")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def serialize(every: int, dry_run: bool, as_json: bool):
+    """Serialize pending tasks into a linear sequence with checkpoints.
+
+    Performs topological sort on existing tasks (respecting dependencies),
+    then creates a fully linear chain with checkpoint tasks inserted.
+    This ensures tasks run sequentially with compaction opportunities.
+
+    Examples:
+        aqua serialize                  # Insert checkpoint after every task
+        aqua serialize --every 2        # Checkpoint every 2 tasks
+        aqua serialize --dry-run        # Preview without making changes
+    """
+    project_dir = get_project_dir()
+    db = get_db(project_dir)
+
+    try:
+        # Get all pending tasks
+        pending_tasks = db.get_all_tasks(status=TaskStatus.PENDING)
+
+        if not pending_tasks:
+            if as_json:
+                output_json({"status": "no_tasks", "message": "No pending tasks to serialize"})
+            else:
+                console.print("[yellow]No pending tasks to serialize.[/yellow]")
+            return
+
+        # Topologically sort them
+        try:
+            sorted_tasks = db.topological_sort_tasks([t.id for t in pending_tasks])
+        except ValueError as e:
+            if as_json:
+                output_json({"error": "cycle_detected", "message": str(e)})
+            else:
+                console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+
+        if not sorted_tasks:
+            if as_json:
+                output_json({"status": "no_tasks", "message": "No tasks after sorting"})
+            else:
+                console.print("[yellow]No tasks after sorting.[/yellow]")
+            return
+
+        # Build the serialized sequence
+        sequence = []  # List of (task_or_checkpoint, is_checkpoint)
+        checkpoints_to_create = []
+        tasks_to_update = []
+
+        prev_id = None  # ID of previous item (task or checkpoint)
+        task_count_since_checkpoint = 0
+
+        for i, task in enumerate(sorted_tasks):
+            # Update this task to depend on the previous item (if any)
+            new_depends_on = [prev_id] if prev_id else []
+
+            if task.depends_on != new_depends_on:
+                tasks_to_update.append((task.id, new_depends_on))
+
+            sequence.append({"type": "task", "id": task.id, "title": task.title})
+            prev_id = task.id
+            task_count_since_checkpoint += 1
+
+            # Insert checkpoint after every N tasks (but not after the last one)
+            if task_count_since_checkpoint >= every and i < len(sorted_tasks) - 1:
+                checkpoint_id = generate_short_id()
+                checkpoint_title = "[Checkpoint] Clear and continue"
+                checkpoints_to_create.append({
+                    "id": checkpoint_id,
+                    "title": checkpoint_title,
+                    "depends_on": [prev_id],
+                })
+                sequence.append({"type": "checkpoint", "id": checkpoint_id, "title": checkpoint_title})
+                prev_id = checkpoint_id
+                task_count_since_checkpoint = 0
+
+        # Dry run mode: just show what would happen
+        if dry_run:
+            result = {
+                "dry_run": True,
+                "sequence": sequence,
+                "tasks_to_update": len(tasks_to_update),
+                "checkpoints_to_create": len(checkpoints_to_create),
+            }
+            if as_json:
+                output_json(result)
+            else:
+                console.print("[bold]Dry run - would create this sequence:[/bold]\n")
+                for i, item in enumerate(sequence, 1):
+                    if item["type"] == "checkpoint":
+                        console.print(f"  {i}. [yellow]⏸ {item['title']}[/yellow]")
+                    else:
+                        console.print(f"  {i}. {item['title']} [dim]({item['id']})[/dim]")
+                console.print(f"\n[dim]Would update {len(tasks_to_update)} task dependencies[/dim]")
+                console.print(f"[dim]Would create {len(checkpoints_to_create)} checkpoint tasks[/dim]")
+            return
+
+        # Actually make the changes
+        # 1. Update task dependencies
+        for task_id, new_deps in tasks_to_update:
+            now = _utc_now_naive().isoformat()
+            db.conn.execute(
+                "UPDATE tasks SET depends_on = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(new_deps), now, task_id)
+            )
+
+        # 2. Create checkpoint tasks
+        for cp in checkpoints_to_create:
+            checkpoint_task = Task(
+                id=cp["id"],
+                title=cp["title"],
+                tags=[CHECKPOINT_TAG],
+                depends_on=cp["depends_on"],
+                priority=5,  # Default priority for checkpoints
+            )
+            db.create_task(checkpoint_task)
+
+        # Output result
+        result = {
+            "status": "serialized",
+            "sequence": sequence,
+            "tasks_updated": len(tasks_to_update),
+            "checkpoints_created": len(checkpoints_to_create),
+        }
+
+        if as_json:
+            output_json(result)
+        else:
+            console.print("[green]✓[/green] Serialized tasks into linear sequence:\n")
+            for i, item in enumerate(sequence, 1):
+                if item["type"] == "checkpoint":
+                    console.print(f"  {i}. [yellow]⏸ {item['title']}[/yellow] [dim]({item['id']})[/dim]")
+                else:
+                    console.print(f"  {i}. {item['title']} [dim]({item['id']})[/dim]")
+            console.print(f"\n[dim]Updated {len(tasks_to_update)} task dependencies[/dim]")
+            console.print(f"[dim]Created {len(checkpoints_to_create)} checkpoint tasks[/dim]")
 
     finally:
         db.close()
@@ -784,17 +951,34 @@ def claim(task_id: str, as_json: bool):
                     console.print(f"[dim]({claimed} task(s) being worked on by other agents)[/dim]")
             return
 
+        # Check if this is a checkpoint task
+        is_checkpoint = CHECKPOINT_TAG in (task.tags or [])
+
         if as_json:
             result = task.to_dict()
             result["is_role_match"] = is_role_match
+            result["is_checkpoint"] = is_checkpoint
             output_json(result)
         else:
             # Show info if task doesn't match agent's role
             if not is_role_match and agent.role:
                 console.print(f"[yellow]Note:[/yellow] No {agent.role} tasks available.")
-            console.print(f"[green]✓[/green] Claimed task [cyan]{task.id}[/cyan]: {task.title}")
-            if task.description:
-                console.print(f"  [dim]{task.description}[/dim]")
+
+            if is_checkpoint:
+                # Show special checkpoint instructions
+                console.print(Panel(
+                    "[bold]Checkpoint Reached[/bold]\n\n"
+                    "This is a context checkpoint. Run:\n"
+                    "  aqua done\n\n"
+                    "Then exit this session. Aqua will respawn\n"
+                    "a fresh agent with full context restored.",
+                    title="[yellow]⏸ Checkpoint[/yellow]",
+                    border_style="yellow"
+                ))
+            else:
+                console.print(f"[green]✓[/green] Claimed task [cyan]{task.id}[/cyan]: {task.title}")
+                if task.description:
+                    console.print(f"  [dim]{task.description}[/dim]")
 
     finally:
         db.close()
@@ -1029,6 +1213,29 @@ def refresh(as_json: bool):
                 "task_counts": task_counts,
                 "next_action": "aqua claim" if not current_task else "continue working on your task",
             }
+
+            # Add checkpoint context if current task is a checkpoint
+            if current_task and CHECKPOINT_TAG in (current_task.tags or []):
+                result["is_checkpoint"] = True
+                result["next_action"] = "aqua done (then aqua claim)"
+
+                # Include previous task summary
+                if current_task.depends_on:
+                    prev_task = db.get_task(current_task.depends_on[0])
+                    if prev_task:
+                        result["previous_task"] = {
+                            "id": prev_task.id,
+                            "title": prev_task.title,
+                            "summary": prev_task.result,
+                        }
+
+                # Include upcoming tasks
+                upcoming = db.get_upcoming_tasks(current_task.id, limit=5)
+                if upcoming:
+                    result["upcoming_tasks"] = [
+                        {"id": t.id, "title": t.title} for t in upcoming
+                    ]
+
             output_json(result)
             return
 
@@ -1054,15 +1261,45 @@ def refresh(as_json: bool):
 
         # Current task
         if current_task:
-            console.print("[bold]Current Task:[/bold]")
-            console.print(f"  [cyan]{current_task.id[:8]}[/cyan]: {current_task.title}")
-            if current_task.description:
-                console.print(f"  [dim]{current_task.description}[/dim]")
-            if agent.last_progress:
-                console.print(f"  [bold]Last progress:[/bold] {agent.last_progress}")
-            console.print()
-            console.print("  → Continue working on this task")
-            console.print("  → When done: aqua done --summary \"what you did\"")
+            is_checkpoint = CHECKPOINT_TAG in (current_task.tags or [])
+
+            if is_checkpoint:
+                # Special checkpoint context display
+                console.print("[bold yellow]Current Task: Checkpoint[/bold yellow]")
+                console.print()
+
+                # Show previous task's summary
+                if current_task.depends_on:
+                    prev_task = db.get_task(current_task.depends_on[0])
+                    if prev_task:
+                        console.print("[bold]Previous Task Completed:[/bold]")
+                        console.print(f"  \"{prev_task.title}\"")
+                        if prev_task.result:
+                            console.print(f"  [dim]Summary: {prev_task.result}[/dim]")
+                        else:
+                            console.print("  [dim]Summary: (no summary provided)[/dim]")
+                        console.print()
+
+                # Show upcoming tasks
+                upcoming = db.get_upcoming_tasks(current_task.id, limit=5)
+                if upcoming:
+                    console.print("[bold]Coming Up Next:[/bold]")
+                    for i, task in enumerate(upcoming, 1):
+                        console.print(f"  {i}. {task.title}")
+                    console.print()
+
+                console.print("  → Mark done with: aqua done")
+                console.print("  → Then: aqua claim")
+            else:
+                console.print("[bold]Current Task:[/bold]")
+                console.print(f"  [cyan]{current_task.id[:8]}[/cyan]: {current_task.title}")
+                if current_task.description:
+                    console.print(f"  [dim]{current_task.description}[/dim]")
+                if agent.last_progress:
+                    console.print(f"  [bold]Last progress:[/bold] {agent.last_progress}")
+                console.print()
+                console.print("  → Continue working on this task")
+                console.print("  → When done: aqua done --summary \"what you did\"")
         else:
             console.print("[bold]Current Task:[/bold] None")
             console.print()
@@ -1961,7 +2198,7 @@ This tells you:
 - What you were last working on
 - Unread messages from other agents
 
-**Run `aqua refresh` after every context compaction or when resuming work.**
+**Run `aqua refresh` after /compact or when resuming work.**
 
 ## Quick Reference
 
@@ -2160,7 +2397,7 @@ aqua spawn 4 --assign-roles  # Auto-assign predefined roles
 
 ## Rules
 
-- **ALWAYS run `aqua refresh` first** - especially after context compaction
+- **ALWAYS run `aqua refresh` first** - especially after /compact or resuming work
 - **Always claim before working** - prevents two agents doing the same thing
 - **Report progress frequently** - `aqua progress` saves your state for recovery
 - **Complete promptly** - others may be waiting
@@ -2244,7 +2481,6 @@ AGENT_MD_FILES = {
     "codex": "AGENTS.md",     # Codex CLI
     "gemini": "GEMINI.md",    # Gemini CLI
 }
-
 
 @main.command()
 @click.option("--claude", is_flag=True, help="Add instructions to CLAUDE.md (Claude Code)")
@@ -2549,13 +2785,14 @@ def _detect_agent_cli() -> str | None:
 @click.option("--model", default=None, help="Model to use (default depends on CLI)")
 @click.option("--background/--interactive", "-b/-i", default=False,
               help="Background (autonomous) or interactive (new terminals)")
+@click.option("--loop", is_flag=True, help="Respawn agents on checkpoint exit (use with -b)")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation for background mode")
 @click.option("--dry-run", is_flag=True, help="Show commands without executing")
 @click.option("--worktree/--no-worktree", default=False, help="Create git worktrees for each agent")
 @require_init
 def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_gemini: bool,
           role_list: tuple, roles: str, assign_roles: bool,
-          model: str, background: bool, yes: bool, dry_run: bool, worktree: bool):
+          model: str, background: bool, loop: bool, yes: bool, dry_run: bool, worktree: bool):
     """Spawn AI agents to work on tasks.
 
     Supports multiple agent CLIs: Claude Code, Codex CLI, Gemini CLI.
@@ -2580,6 +2817,11 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
       Runs agents as background processes. Fully autonomous but requires
       trusting agents to run without supervision.
 
+    \b
+    LOOP MODE (--loop, requires -b):
+      Respawns agents when they exit after a checkpoint. Use with serialized
+      tasks for long-running projects. Fresh context on each respawn.
+
     Examples:
         aqua spawn 3                       # 3 agents (auto-detect CLI)
         aqua spawn 2 -b                    # 2 background autonomous agents
@@ -2588,11 +2830,20 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
         aqua spawn 4 -b --claude --codex --gemini  # Mix of all three
         aqua spawn 3 --claude --roles frontend,backend,testing  # With roles
         aqua spawn 4 --claude --assign-roles -b  # Auto-assign predefined roles
+        aqua spawn 1 -b --loop             # Single agent, respawns on checkpoint
+        aqua spawn 3 -b --loop --roles frontend,backend,testing  # Loop with roles
     """
     import shutil
     import subprocess
+    import time as time_module
 
     project_dir = get_project_dir()
+
+    # Validate --loop requires --background
+    if loop and not background:
+        console.print("[red]Error:[/red] --loop requires --background (-b) mode.")
+        console.print("Loop mode respawns agents automatically, which only works in background.")
+        sys.exit(1)
 
     # Build list of CLIs to use (round-robin)
     cli_list = []
@@ -2874,7 +3125,6 @@ end tell
 
         # Validate background agents actually started
         if bg_agents:
-            import time as time_module
             console.print()
             console.print("[dim]Waiting for agents to join...[/dim]")
 
@@ -2932,12 +3182,118 @@ end tell
             finally:
                 db.close()
 
-            console.print()
-            console.print("Monitor with:")
-            console.print("  aqua status          # See agent status")
-            console.print("  aqua watch           # Live dashboard")
-            for agent in bg_agents:
-                console.print(f"  tail -f {agent['log']}  # {agent['name']} logs")
+            if not loop:
+                console.print()
+                console.print("Monitor with:")
+                console.print("  aqua status          # See agent status")
+                console.print("  aqua watch           # Live dashboard")
+                for agent in bg_agents:
+                    console.print(f"  tail -f {agent['log']}  # {agent['name']} logs")
+            else:
+                # Loop mode: wait for agents to exit, respawn if tasks remain
+                console.print()
+                console.print("[bold]Loop mode active[/bold] - will respawn agents on checkpoint exit")
+                console.print("[dim]Press Ctrl+C to stop[/dim]")
+                console.print()
+
+                iteration = 1
+                try:
+                    while True:
+                        # Wait for all background agents to exit
+                        console.print(f"[dim]Iteration {iteration}: Waiting for agents to complete...[/dim]")
+                        for agent in bg_agents:
+                            pid = agent.get("pid")
+                            if pid:
+                                try:
+                                    # Wait for process to exit
+                                    os.waitpid(pid, 0)
+                                except ChildProcessError:
+                                    pass  # Process already exited
+
+                        # Check if there are pending tasks (excluding completed checkpoints)
+                        db = get_db(project_dir)
+                        try:
+                            pending_tasks = db.get_all_tasks(status=TaskStatus.PENDING)
+                            # Filter out checkpoint tasks that are blocked
+                            claimable_tasks = [
+                                t for t in pending_tasks
+                                if db._dependencies_met(t)
+                            ]
+                        finally:
+                            db.close()
+
+                        if not claimable_tasks:
+                            console.print()
+                            console.print("[green]✓ All tasks complete![/green] Exiting loop.")
+                            break
+
+                        console.print(f"[dim]{len(claimable_tasks)} task(s) remaining. Respawning agents...[/dim]")
+                        iteration += 1
+
+                        # Respawn agents
+                        bg_agents = []
+                        for i in range(1, count + 1):
+                            cli_name = cli_list[(i - 1) % len(cli_list)]
+                            cli_config = AGENT_CLI_CONFIG[cli_name]
+                            cli_command = cli_config["command"]
+                            agent_role = final_role_list[(i - 1) % len(final_role_list)] if final_role_list else None
+                            agent_name = f"{name_prefix}-{i}"
+
+                            prompt = _build_agent_prompt(agent_name, str(project_dir), agent_role)
+                            cmd = [cli_command] + cli_config["background_args"]
+                            if model and cli_config["model_arg"]:
+                                cmd.extend([cli_config["model_arg"], model])
+
+                            if cli_config.get("prompt_style") == "file":
+                                prompt_file = project_dir / ".aqua" / f"{agent_name}.prompt.md"
+                                prompt_file.write_text(prompt)
+                                cmd.append(str(prompt_file))
+                            else:
+                                cmd.append(prompt)
+
+                            try:
+                                log_file = project_dir / ".aqua" / f"{agent_name}.log"
+                                env = os.environ.copy()
+                                env["AQUA_SESSION_ID"] = agent_name
+                                if agent_role:
+                                    env["AQUA_AGENT_ROLE"] = agent_role
+                                with open(log_file, "a") as log:  # Append to existing log
+                                    log.write(f"\n--- Respawn iteration {iteration} ---\n")
+                                    process = subprocess.Popen(
+                                        cmd,
+                                        cwd=project_dir,
+                                        stdout=log,
+                                        stderr=subprocess.STDOUT,
+                                        env=env,
+                                    )
+                                bg_agents.append({
+                                    "name": agent_name,
+                                    "pid": process.pid,
+                                    "log": str(log_file),
+                                    "mode": "background",
+                                    "cli": cli_name,
+                                    "role": agent_role,
+                                })
+                                role_str = f" {agent_role}" if agent_role else ""
+                                console.print(f"[green]↻[/green] Respawned [cyan]{agent_name}[/cyan]{role_str} (PID: {process.pid})")
+                            except Exception as e:
+                                console.print(f"[red]Error respawning {agent_name}:[/red] {e}")
+
+                        # Brief pause before checking again
+                        time_module.sleep(2)
+
+                except KeyboardInterrupt:
+                    console.print()
+                    console.print("[yellow]Loop stopped by user.[/yellow]")
+                    # Kill any running agents
+                    for agent in bg_agents:
+                        pid = agent.get("pid")
+                        if pid and process_exists(pid):
+                            try:
+                                os.kill(pid, 15)  # SIGTERM
+                                console.print(f"[dim]Stopped {agent['name']}[/dim]")
+                            except ProcessLookupError:
+                                pass
 
         if int_agents:
             console.print("Interactive agents opened in new terminal windows.")

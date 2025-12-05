@@ -467,6 +467,98 @@ class Database:
 
         return None
 
+    def topological_sort_tasks(self, task_ids: list[str]) -> list[Task]:
+        """
+        Sort tasks respecting dependencies using Kahn's algorithm.
+
+        Returns tasks in an order where dependencies come before dependents.
+        Tasks with no dependencies are sorted by priority DESC, created_at ASC.
+        Raises ValueError if a cycle is detected.
+        """
+        tasks = {tid: self.get_task(tid) for tid in task_ids if self.get_task(tid)}
+
+        if not tasks:
+            return []
+
+        # Build in-degree map (count of dependencies within the task set)
+        in_degree: dict[str, int] = {tid: 0 for tid in tasks}
+        for tid, task in tasks.items():
+            for dep in task.depends_on or []:
+                if dep in in_degree:
+                    in_degree[tid] += 1
+
+        # Start with tasks that have no dependencies (within the set)
+        # Sort by priority DESC, created_at ASC
+        queue = sorted(
+            [tid for tid, deg in in_degree.items() if deg == 0],
+            key=lambda t: (-tasks[t].priority, tasks[t].created_at)
+        )
+        result: list[Task] = []
+
+        while queue:
+            tid = queue.pop(0)
+            result.append(tasks[tid])
+
+            # Find tasks that depend on this one
+            for other_id, other_task in tasks.items():
+                if tid in (other_task.depends_on or []):
+                    in_degree[other_id] -= 1
+                    if in_degree[other_id] == 0:
+                        queue.append(other_id)
+                        # Re-sort to maintain priority order
+                        queue.sort(key=lambda t: (-tasks[t].priority, tasks[t].created_at))
+
+        if len(result) != len(tasks):
+            raise ValueError("Cycle detected in task dependencies")
+
+        return result
+
+    def get_upcoming_tasks(
+        self, checkpoint_id: str, limit: int = 5
+    ) -> list[Task]:
+        """
+        Get non-checkpoint tasks that come after a checkpoint task.
+
+        Follows the dependency chain forward to find tasks that depend
+        on this checkpoint (directly or transitively).
+        """
+        checkpoint = self.get_task(checkpoint_id)
+        if not checkpoint:
+            return []
+
+        # Find all pending tasks
+        all_pending = self.get_all_tasks(status=TaskStatus.PENDING)
+
+        # Build reverse dependency map: task_id -> list of tasks that depend on it
+        dependents: dict[str, list[Task]] = {}
+        for task in all_pending:
+            for dep_id in task.depends_on or []:
+                if dep_id not in dependents:
+                    dependents[dep_id] = []
+                dependents[dep_id].append(task)
+
+        # BFS from checkpoint to find downstream tasks
+        result: list[Task] = []
+        visited: set[str] = set()
+        queue = [checkpoint_id]
+
+        while queue and len(result) < limit:
+            current_id = queue.pop(0)
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+
+            for task in dependents.get(current_id, []):
+                if task.id not in visited:
+                    # Skip checkpoint tasks, we want real tasks
+                    if "__checkpoint__" not in (task.tags or []):
+                        result.append(task)
+                        if len(result) >= limit:
+                            break
+                    queue.append(task.id)
+
+        return result
+
     def claim_task(
         self, task_id: str, agent_id: str, term: int
     ) -> bool:
