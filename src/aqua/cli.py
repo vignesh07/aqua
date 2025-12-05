@@ -2718,6 +2718,15 @@ Work through tasks in the Aqua task queue until there are no more pending tasks.
 7. Check: aqua inbox --unread (for messages from other agents)
 8. Go back to step 2 and repeat until aqua claim returns no tasks
 {task_selection_section}
+## Checkpoint Tasks
+When you claim a task titled "[Checkpoint] Clear and continue":
+1. This is a context management checkpoint - no actual work to do
+2. Simply run: aqua done
+3. Then EXIT the session immediately (stop running, don't claim more tasks)
+4. Aqua will respawn a fresh agent with full context to continue
+
+Checkpoints prevent context overflow in long-running projects. Treat them as "save and exit" points.
+
 ## Important Rules
 - ALWAYS claim a task before working on it
 - ALWAYS mark tasks done or failed when finished
@@ -3210,11 +3219,14 @@ end tell
                                 except ChildProcessError:
                                     pass  # Process already exited
 
+                        # Small delay to ensure DB commits are flushed
+                        time_module.sleep(1)
+
                         # Check if there are pending tasks (excluding completed checkpoints)
                         db = get_db(project_dir)
                         try:
                             pending_tasks = db.get_all_tasks(status=TaskStatus.PENDING)
-                            # Filter out checkpoint tasks that are blocked
+                            # Filter for tasks with dependencies met
                             claimable_tasks = [
                                 t for t in pending_tasks
                                 if db._dependencies_met(t)
@@ -3223,6 +3235,19 @@ end tell
                             db.close()
 
                         if not claimable_tasks:
+                            # Double-check: are there ANY pending tasks?
+                            if pending_tasks:
+                                console.print(f"[yellow]Warning:[/yellow] {len(pending_tasks)} pending tasks but none claimable (blocked by dependencies)")
+                                console.print("[dim]Checking if tasks are stuck...[/dim]")
+                                # Show first few blocked tasks
+                                db = get_db(project_dir)
+                                try:
+                                    for t in pending_tasks[:3]:
+                                        blocking = db.get_blocking_dependencies(t)
+                                        if blocking:
+                                            console.print(f"  [dim]{t.title[:40]} blocked by: {[b.title[:20] for b in blocking]}[/dim]")
+                                finally:
+                                    db.close()
                             console.print()
                             console.print("[green]✓ All tasks complete![/green] Exiting loop.")
                             break
