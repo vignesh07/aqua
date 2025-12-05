@@ -3205,11 +3205,51 @@ end tell
                 console.print("[dim]Press Ctrl+C to stop[/dim]")
                 console.print()
 
+                # Known error patterns that indicate fatal failures (shouldn't respawn)
+                FATAL_ERROR_PATTERNS = [
+                    # Claude
+                    ("Credit balance is too low", "Claude API credits exhausted"),
+                    ("invalid_api_key", "Invalid Claude API key"),
+                    ("authentication_error", "Claude authentication failed"),
+                    # Codex
+                    ("rate_limit", "API rate limit exceeded"),
+                    ("insufficient_quota", "API quota exhausted"),
+                    ("invalid_api_key", "Invalid API key"),
+                    # Gemini
+                    ("RESOURCE_EXHAUSTED", "Gemini quota exhausted"),
+                    ("PERMISSION_DENIED", "Gemini permission denied"),
+                    ("UNAUTHENTICATED", "Gemini authentication failed"),
+                    # Generic
+                    ("API key", "API key issue"),
+                ]
+
+                def check_logs_for_errors(log_files: list[str]) -> str | None:
+                    """Check agent logs for fatal errors. Returns error message if found."""
+                    for log_file in log_files:
+                        try:
+                            # Read last 2KB of log file
+                            with open(log_file, "r") as f:
+                                f.seek(0, 2)  # End of file
+                                size = f.tell()
+                                f.seek(max(0, size - 2048))
+                                content = f.read()
+                                for pattern, message in FATAL_ERROR_PATTERNS:
+                                    if pattern.lower() in content.lower():
+                                        return message
+                        except (OSError, IOError):
+                            pass
+                    return None
+
                 iteration = 1
+                consecutive_failures = 0
+                last_completed_count = 0
+                MAX_CONSECUTIVE_FAILURES = 3
+
                 try:
                     while True:
                         # Wait for all background agents to exit
                         console.print(f"[dim]Iteration {iteration}: Waiting for agents to complete...[/dim]")
+                        iteration_start = time_module.time()
                         for agent in bg_agents:
                             pid = agent.get("pid")
                             if pid:
@@ -3218,6 +3258,29 @@ end tell
                                     os.waitpid(pid, 0)
                                 except ChildProcessError:
                                     pass  # Process already exited
+                        iteration_duration = time_module.time() - iteration_start
+
+                        # Check for fatal errors in logs
+                        log_files = [a["log"] for a in bg_agents if "log" in a]
+                        fatal_error = check_logs_for_errors(log_files)
+                        if fatal_error:
+                            console.print()
+                            console.print(f"[red]Fatal error detected:[/red] {fatal_error}")
+                            console.print("[dim]Check agent logs for details. Stopping loop.[/dim]")
+                            break
+
+                        # Check if agent exited too quickly (likely crashed)
+                        if iteration_duration < 10:
+                            consecutive_failures += 1
+                            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                                console.print()
+                                console.print(f"[red]Agents exiting too quickly[/red] ({consecutive_failures} consecutive fast exits)")
+                                console.print("[dim]Check agent logs for errors. Stopping loop.[/dim]")
+                                for lf in log_files:
+                                    console.print(f"  tail -f {lf}")
+                                break
+                        else:
+                            consecutive_failures = 0
 
                         # Small delay to ensure DB commits are flushed
                         time_module.sleep(1)
