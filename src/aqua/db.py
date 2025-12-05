@@ -238,7 +238,6 @@ class Database:
 
     def update_heartbeat(self, agent_id: str) -> None:
         """Update an agent's heartbeat timestamp and renew leader lease if leader."""
-        from datetime import timedelta
 
         now = _utc_now_naive()
         now_iso = now.isoformat()
@@ -368,6 +367,43 @@ class Database:
                 return task
 
         return None
+
+    def get_next_pending_task_for_role(self, role: str | None) -> tuple[Task | None, bool]:
+        """Get next pending task, preferring tasks matching agent's role.
+
+        Args:
+            role: Agent's role (e.g., "frontend", "backend"). If None, behaves like get_next_pending_task().
+
+        Returns:
+            Tuple of (task, is_role_match):
+            - task: The next available task, or None if no tasks available
+            - is_role_match: True if task matches agent's role, False otherwise
+        """
+        # If no role, just use normal task selection (keep it simple)
+        if not role:
+            task = self.get_next_pending_task()
+            return (task, True) if task else (None, True)  # No role = always "match"
+
+        # First: try to find a task matching the agent's role
+        cursor = self.conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE status = 'pending'
+            AND tags LIKE ?
+            ORDER BY priority DESC, created_at ASC
+            """,
+            (f'%"{role}"%',)
+        )
+        rows = cursor.fetchall()
+
+        for row in rows:
+            task = Task.from_row(dict(row))
+            if self._dependencies_met(task):
+                return (task, True)  # Found a role-matching task!
+
+        # Fallback: return any pending task (not a role match)
+        task = self.get_next_pending_task()
+        return (task, False) if task else (None, True)  # No tasks = no mismatch to report
 
     def _dependencies_met(self, task: Task) -> bool:
         """Check if all dependencies of a task are complete."""
@@ -570,7 +606,6 @@ class Database:
         Attempt to become or remain leader.
         Returns (is_leader, term).
         """
-        from datetime import timedelta
 
         now = _utc_now_naive()
         new_lease_expires = (now + timedelta(seconds=lease_seconds)).isoformat()

@@ -33,6 +33,74 @@ Aqua solves this by providing:
 - **Agent Agnostic**: Works with Claude Code, Codex CLI, Gemini CLI, or any CLI tool
 - **Zero External Dependencies**: Uses SQLite - no Redis, Docker, or external services
 - **JSON Mode**: Full `--json` support and `AQUA_JSON=1` env var for programmatic access
+- **Agent Roles**: Assign specializations (frontend, backend, reviewer) so agents self-select appropriate tasks
+
+## Agent Roles
+
+Roles let you spawn specialized agents that prioritize tasks matching their expertise. This is completely optional - agents without roles work on any available task.
+
+### Assigning Roles
+
+```bash
+# Distribute roles across agents (round-robin)
+aqua spawn 3 --roles frontend,backend,testing
+# worker-1: frontend, worker-2: backend, worker-3: testing
+
+# Auto-assign predefined roles
+aqua spawn 4 --assign-roles
+# Cycles through: reviewer, frontend, backend, testing, devops
+
+# Single role for all agents
+aqua spawn 2 --role reviewer
+```
+
+### How Role Matching Works
+
+1. **Tag your tasks** with role-relevant tags:
+   ```bash
+   aqua add "Fix login button styling" -t frontend -p 7
+   aqua add "Add user API endpoint" -t backend -p 6
+   aqua add "Review authentication PR" -t review -p 8
+   ```
+
+2. **Agents prioritize matching tasks**: A `frontend` agent will claim tasks tagged `frontend` before claiming untagged tasks.
+
+3. **Fallback behavior**: If no matching tasks exist, agents can still claim any available task (they're informed when doing so).
+
+### Predefined Roles
+
+| Role | Focuses on tags |
+|------|----------------|
+| `reviewer` | review, pr, code-review |
+| `frontend` | frontend, ui, css, react, component |
+| `backend` | backend, api, database, server |
+| `testing` | test, testing, qa, e2e |
+| `devops` | devops, deploy, ci, infra |
+
+### Custom Roles
+
+Any string works as a role - agents will match against tasks with that tag:
+
+```bash
+aqua spawn 2 --roles security,performance
+aqua add "Audit auth module" -t security
+aqua add "Optimize database queries" -t performance
+```
+
+### Example: Role-Based Team
+
+```bash
+# Add tasks with appropriate tags
+aqua add "Review PR #42" -t review -p 9
+aqua add "Fix navbar responsiveness" -t frontend -p 7
+aqua add "Add /products endpoint" -t backend -p 7
+aqua add "Write integration tests" -t testing -p 6
+
+# Spawn specialized team
+aqua spawn 4 --assign-roles -b
+
+# Each agent claims tasks matching their role first
+```
 
 ## Installation
 
@@ -74,6 +142,9 @@ aqua spawn 2 --codex
 
 # Mix agents with round-robin assignment
 aqua spawn 4 -b --claude --codex  # 2 Claude + 2 Codex
+
+# Assign roles to agents (see Agent Roles section below)
+aqua spawn 3 --roles frontend,backend,testing
 
 # Skip confirmation (for programmatic use or leader agents)
 aqua spawn 2 -b -y
@@ -147,6 +218,19 @@ aqua add "Title" \
 | `aqua ps` | Show all agent processes |
 | `aqua kill [name\|--all]` | Kill agent(s) |
 | `aqua spawn <count>` | Spawn AI agents in new terminals |
+
+**Options for `aqua spawn`:**
+```bash
+aqua spawn 3 \
+  --claude \                # Use Claude Code (default: auto-detect)
+  --codex \                 # Use Codex CLI
+  --gemini \                # Use Gemini CLI
+  --role frontend \         # Assign role (repeatable, round-robin)
+  --roles fe,be,test \      # Comma-separated roles
+  --assign-roles \          # Auto-assign predefined roles
+  -b \                      # Background mode (autonomous)
+  --worktree               # Each agent gets own git worktree
+```
 
 ### File Locking
 

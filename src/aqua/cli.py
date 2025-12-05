@@ -275,8 +275,9 @@ def status(as_json: bool):
             # Check leader status based on agent liveness, not just lease
             if leader_agent:
                 # Agent exists - check if alive based on heartbeat
-                from aqua.coordinator import AGENT_DEAD_THRESHOLD_SECONDS
                 from datetime import timedelta
+
+                from aqua.coordinator import AGENT_DEAD_THRESHOLD_SECONDS
                 heartbeat_age = _utc_now_naive() - leader_agent.last_heartbeat_at
                 is_alive = heartbeat_age < timedelta(seconds=AGENT_DEAD_THRESHOLD_SECONDS)
                 if is_alive:
@@ -403,7 +404,7 @@ def add(title: str, description: str, priority: int, tag: tuple, context: str,
                 if as_json:
                     output_json({"error": "circular_dependency", "cycle": cycle})
                 else:
-                    console.print(f"[red]Error:[/red] Circular dependency detected!")
+                    console.print("[red]Error:[/red] Circular dependency detected!")
                     console.print(f"  [dim]Cycle: {cycle_str}[/dim]")
                 sys.exit(1)
 
@@ -558,15 +559,19 @@ def show(task_id: str, as_json: bool):
 @click.option("-t", "--type", "agent_type", default="generic",
               type=click.Choice(["claude", "codex", "gemini", "generic"]),
               help="Agent type")
+@click.option("-r", "--role", help="Agent role (e.g., frontend, backend, reviewer)")
 @click.option("-c", "--cap", multiple=True, help="Capability (can be repeated)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
-def join(name: str, agent_type: str, cap: tuple, as_json: bool):
+def join(name: str, agent_type: str, role: str, cap: tuple, as_json: bool):
     """Register as an agent in the quorum."""
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
     try:
+        # Read role from env if not provided (set by spawn command)
+        role = role or os.environ.get("AQUA_AGENT_ROLE")
+
         # Generate unique name if not provided
         if not name:
             # Keep generating until we find a unique name
@@ -609,6 +614,7 @@ def join(name: str, agent_type: str, cap: tuple, as_json: bool):
             agent_type=AgentType(agent_type),
             pid=get_current_pid(),
             capabilities=list(cap),
+            role=role,
         )
 
         db.create_agent(agent)
@@ -624,7 +630,8 @@ def join(name: str, agent_type: str, cap: tuple, as_json: bool):
             output_json(data)
         else:
             leader_str = " [bold yellow](leader)[/bold yellow]" if is_leader else ""
-            console.print(f"[green]✓[/green] Joined as [cyan]{name}[/cyan]{leader_str}")
+            role_str = f" [magenta]{role}[/magenta]" if role else ""
+            console.print(f"[green]✓[/green] Joined as [cyan]{name}[/cyan]{role_str}{leader_str}")
             console.print(f"  Agent ID: {agent.id}")
 
     finally:
@@ -730,8 +737,10 @@ def claim(task_id: str, as_json: bool):
 
         if task_id:
             task = coordinator.claim_specific_task(agent_id, task_id)
+            is_role_match = True  # Specific task claim = user's choice
         else:
-            task = coordinator.claim_next_task(agent_id)
+            # Use role-aware claiming if agent has a role
+            task, is_role_match = coordinator.claim_next_task_for_role(agent_id)
 
         if not task:
             # Check if all work is done or just nothing available right now
@@ -776,8 +785,13 @@ def claim(task_id: str, as_json: bool):
             return
 
         if as_json:
-            output_json(task.to_dict())
+            result = task.to_dict()
+            result["is_role_match"] = is_role_match
+            output_json(result)
         else:
+            # Show info if task doesn't match agent's role
+            if not is_role_match and agent.role:
+                console.print(f"[yellow]Note:[/yellow] No {agent.role} tasks available.")
             console.print(f"[green]✓[/green] Claimed task [cyan]{task.id}[/cyan]: {task.title}")
             if task.description:
                 console.print(f"  [dim]{task.description}[/dim]")
@@ -976,20 +990,16 @@ def refresh(as_json: bool):
         leader = db.get_leader()
         is_leader = leader and leader.agent_id == agent_id and not leader.is_expired()
 
-        # Check if leadership changed
-        was_leader = agent.role == "leader"
-        leadership_changed = was_leader and not is_leader
+        # Note: Leadership status comes from the Leader table, not the role field.
+        # The role field is for user-defined roles (frontend, backend, etc.)
+        # We can't detect "leadership changed" without extra state tracking,
+        # so we just show current leadership status.
 
-        # Update role in DB
-        new_role = "leader" if is_leader else None
-        if agent.role != new_role:
-            db.conn.execute("UPDATE agents SET role = ? WHERE id = ?", (new_role, agent_id))
-
-        # Get new leader info if we lost leadership
-        new_leader_name = None
-        if leadership_changed and leader:
-            new_leader_agent = db.get_agent(leader.agent_id)
-            new_leader_name = new_leader_agent.name if new_leader_agent else leader.agent_id[:8]
+        # Get leader name if someone else is leading
+        other_leader_name = None
+        if leader and leader.agent_id != agent_id and not leader.is_expired():
+            other_leader_agent = db.get_agent(leader.agent_id)
+            other_leader_name = other_leader_agent.name if other_leader_agent else leader.agent_id[:8]
 
         # Get current task if any
         current_task = None
@@ -1009,41 +1019,37 @@ def refresh(as_json: bool):
                     "id": agent.id,
                     "name": agent.name,
                     "type": agent.agent_type.value,
+                    "role": agent.role,
                 },
                 "is_leader": is_leader,
-                "leadership_changed": leadership_changed,
-                "new_leader": new_leader_name,
+                "current_leader": other_leader_name,
                 "current_task": current_task.to_dict() if current_task else None,
                 "last_progress": agent.last_progress,
                 "unread_messages": len(unread_messages),
                 "task_counts": task_counts,
                 "next_action": "aqua claim" if not current_task else "continue working on your task",
             }
-            if leadership_changed:
-                result["message"] = f"You are no longer the leader. {new_leader_name} is now leading. Continue as a worker."
             output_json(result)
             return
 
         # Human-readable output
         console.print()
 
-        # Alert if leadership changed
-        if leadership_changed:
-            console.print(Panel.fit(
-                f"[bold yellow]⚠ Leadership changed![/bold yellow]\n"
-                f"You are no longer the leader. [cyan]{new_leader_name}[/cyan] is now leading.\n"
-                f"Continue working as a regular agent.",
-                border_style="yellow"
-            ))
-            console.print()
+        # Build agent title with role and leader status
+        title_parts = [f"[bold cyan]You are: {agent.name}[/bold cyan]"]
+        if agent.role:
+            title_parts.append(f"[magenta]({agent.role})[/magenta]")
+        if is_leader:
+            title_parts.append("[yellow]★ LEADER[/yellow]")
 
         console.print(Panel.fit(
-            f"[bold cyan]You are: {agent.name}[/bold cyan]" +
-            (" [yellow]★ LEADER[/yellow]" if is_leader else ""),
+            " ".join(title_parts),
             border_style="green"
         ))
 
         console.print(f"[dim]Agent ID: {agent.id}[/dim]")
+        if other_leader_name:
+            console.print(f"[dim]Current leader: {other_leader_name}[/dim]")
         console.print()
 
         # Current task
@@ -1593,6 +1599,7 @@ def doctor(as_json: bool, fix: bool):
 
         # Leader check - based on agent heartbeat liveness
         from datetime import timedelta
+
         from aqua.coordinator import AGENT_DEAD_THRESHOLD_SECONDS
 
         leader = db.get_leader()
@@ -1998,6 +2005,7 @@ aqua progress "message"       # Report progress on current task
 ### Agent Management
 ```bash
 aqua join [-n NAME]           # Register as an agent
+aqua join -n worker --role frontend  # Join with a role
 aqua leave                    # Leave the quorum
 aqua ps                       # Show all agent processes
 aqua kill [NAME|--all]        # Kill agent(s)
@@ -2035,6 +2043,11 @@ aqua log [-n LIMIT]           # View historical events
 aqua spawn COUNT              # Spawn COUNT agents in new terminals
 aqua spawn COUNT -b           # Spawn in background (autonomous)
 aqua spawn COUNT --worktree   # Each agent gets own git worktree
+
+# With roles (agents prioritize tasks matching their role)
+aqua spawn 3 --roles frontend,backend,testing
+aqua spawn 4 --assign-roles   # Auto-assign: reviewer,frontend,backend,testing,devops
+aqua spawn 2 --role reviewer  # All agents get same role
 ```
 
 ### Utility
@@ -2064,6 +2077,14 @@ Guidelines for task breakdown:
 - Add context with `--context` for implementation details
 - Use tags `-t` to categorize (e.g., frontend, backend, tests, docs)
 - Set priorities: 9-10 blocking/critical, 7-8 important, 5-6 normal, 1-4 low
+
+**Role-based task assignment**: If spawning agents with roles, use matching tags:
+```bash
+# Tags should match roles for automatic assignment
+aqua add "Fix button styling" -t frontend -p 7   # frontend agent claims this
+aqua add "Add API endpoint" -t backend -p 7      # backend agent claims this
+aqua add "Review PR #42" -t review -p 8          # reviewer agent claims this
+```
 
 ### 2. Recommend Number of Agents
 
@@ -2123,6 +2144,10 @@ aqua spawn 2 -b
 
 # With git worktrees (prevents file conflicts entirely)
 aqua spawn 2 --worktree
+
+# With roles (agents specialize and claim matching tasks)
+aqua spawn 3 --roles frontend,backend,testing
+aqua spawn 4 --assign-roles  # Auto-assign predefined roles
 ```
 
 ## Standard Workflow (All Agents)
@@ -2364,21 +2389,99 @@ def worktree(name: str, branch: str):
 # Spawn Command - Launch background agents
 # =============================================================================
 
+# Predefined role instructions for specialized agents
+ROLE_INSTRUCTIONS = {
+    "reviewer": """## Your Role: Code Reviewer
+Focus on tasks tagged: review, pr, code-review
+- Review pull requests and provide feedback
+- Ensure code quality and standards
+- Look for bugs, security issues, and improvements""",
+
+    "frontend": """## Your Role: Frontend Developer
+Focus on tasks tagged: frontend, ui, css, react, component
+- UI/UX implementation
+- Client-side logic and state management
+- Styling and responsive design""",
+
+    "backend": """## Your Role: Backend Developer
+Focus on tasks tagged: backend, api, database, server
+- Server-side logic and APIs
+- Data models and database operations
+- Authentication and authorization""",
+
+    "testing": """## Your Role: Test Engineer
+Focus on tasks tagged: test, testing, qa, e2e
+- Writing and maintaining tests
+- Test coverage and quality
+- CI/CD pipeline integration""",
+
+    "devops": """## Your Role: DevOps Engineer
+Focus on tasks tagged: devops, deploy, ci, infra
+- Infrastructure and deployment
+- CI/CD pipelines
+- Monitoring and reliability""",
+}
+
+# Predefined roles list for --assign-roles
+PREDEFINED_ROLES = ["reviewer", "frontend", "backend", "testing", "devops"]
+
+
+def _get_role_instructions(role: str | None) -> str:
+    """Get role-specific instructions for an agent."""
+    if not role:
+        return ""
+    if role in ROLE_INSTRUCTIONS:
+        return ROLE_INSTRUCTIONS[role]
+    # Custom role - generic instructions
+    return f"""## Your Role: {role.title()}
+Focus on tasks tagged: {role}
+- Prioritize tasks that match your specialty
+- Ask leader before claiming unrelated tasks"""
+
+
+def _build_task_selection_section(role: str | None) -> str:
+    """Build task selection guidance for agents with roles."""
+    if not role:
+        return ""
+    return f"""
+## Task Selection
+- Prioritize tasks tagged with your role: {role}
+- If no matching tasks exist, ask the leader before claiming unrelated tasks:
+  `aqua ask "No {role} tasks available. Can I pick up task [ID]: [title]?" --to @leader`
+"""
+
+
+def _build_agent_prompt(agent_name: str, working_dir: str, role: str | None) -> str:
+    """Build the full agent prompt with role-specific sections."""
+    role_section = _get_role_instructions(role)
+    role_join_arg = f" --role {role}" if role else ""
+    task_selection_section = _build_task_selection_section(role)
+
+    return AGENT_PROMPT_TEMPLATE.format(
+        agent_name=agent_name,
+        working_dir=working_dir,
+        role_section=role_section,
+        role_join_arg=role_join_arg,
+        task_selection_section=task_selection_section,
+    )
+
+
 AGENT_PROMPT_TEMPLATE = '''You are an autonomous AI agent named "{agent_name}" working as part of a multi-agent team coordinated by Aqua.
+{role_section}
 
 ## Your Mission
 Work through tasks in the Aqua task queue until there are no more pending tasks.
 
 ## Protocol
-1. First, run: aqua join --name {agent_name}
+1. First, run: aqua join --name {agent_name}{role_join_arg}
 2. Then run: aqua status (to see available tasks)
-3. Run: aqua claim (to get a task)
+3. Run: aqua claim (to get a task matching your role)
 4. If you got a task, work on it by editing files, running commands, etc.
 5. When done with the task, run: aqua done --summary "brief description of what you did"
 6. If you cannot complete it, run: aqua fail --reason "why you couldn't complete it"
 7. Check: aqua inbox --unread (for messages from other agents)
 8. Go back to step 2 and repeat until aqua claim returns no tasks
-
+{task_selection_section}
 ## Important Rules
 - ALWAYS claim a task before working on it
 - ALWAYS mark tasks done or failed when finished
@@ -2390,7 +2493,7 @@ Work through tasks in the Aqua task queue until there are no more pending tasks.
 {working_dir}
 
 ## Start Now
-Begin by running: aqua join --name {agent_name}
+Begin by running: aqua join --name {agent_name}{role_join_arg}
 Then: aqua claim
 '''
 
@@ -2438,6 +2541,11 @@ def _detect_agent_cli() -> str | None:
 @click.option("--claude", "use_claude", is_flag=True, help="Use Claude Code agents")
 @click.option("--codex", "use_codex", is_flag=True, help="Use Codex CLI agents")
 @click.option("--gemini", "use_gemini", is_flag=True, help="Use Gemini CLI agents")
+@click.option("--role", "role_list", multiple=True,
+              help="Role for agents (can repeat, distributed round-robin)")
+@click.option("--roles", help="Comma-separated roles distributed across agents")
+@click.option("--assign-roles", is_flag=True,
+              help="Auto-assign predefined roles (reviewer, frontend, backend, testing, devops)")
 @click.option("--model", default=None, help="Model to use (default depends on CLI)")
 @click.option("--background/--interactive", "-b/-i", default=False,
               help="Background (autonomous) or interactive (new terminals)")
@@ -2445,12 +2553,21 @@ def _detect_agent_cli() -> str | None:
 @click.option("--dry-run", is_flag=True, help="Show commands without executing")
 @click.option("--worktree/--no-worktree", default=False, help="Create git worktrees for each agent")
 @require_init
-def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_gemini: bool, model: str, background: bool, yes: bool, dry_run: bool, worktree: bool):
+def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_gemini: bool,
+          role_list: tuple, roles: str, assign_roles: bool,
+          model: str, background: bool, yes: bool, dry_run: bool, worktree: bool):
     """Spawn AI agents to work on tasks.
 
     Supports multiple agent CLIs: Claude Code, Codex CLI, Gemini CLI.
     Specify multiple CLI flags to mix agents (round-robin assignment).
     Auto-detects which CLI is available if none specified.
+
+    \b
+    ROLES:
+      Assign roles to agents so they prioritize matching tasks.
+      --role frontend --role backend    # Distribute roles to agents
+      --roles frontend,backend,testing  # Comma-separated distribution
+      --assign-roles                    # Auto-assign predefined roles
 
     \b
     INTERACTIVE (default, --interactive or -i):
@@ -2469,6 +2586,8 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
         aqua spawn 2 --codex               # 2 Codex agents
         aqua spawn 3 --claude --codex      # 2 Claude + 1 Codex (round-robin)
         aqua spawn 4 -b --claude --codex --gemini  # Mix of all three
+        aqua spawn 3 --claude --roles frontend,backend,testing  # With roles
+        aqua spawn 4 --claude --assign-roles -b  # Auto-assign predefined roles
     """
     import shutil
     import subprocess
@@ -2504,6 +2623,22 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
             console.print(f"[red]Error:[/red] '{cli_config['command']}' command not found in PATH.")
             console.print(f"Install: {cli_config['install_url']}")
             sys.exit(1)
+
+    # Build role list from various options
+    final_role_list = []
+    if roles:
+        # --roles frontend,backend,testing
+        final_role_list = [r.strip() for r in roles.split(",")]
+    elif assign_roles:
+        # --assign-roles -> cycle through predefined roles
+        final_role_list = PREDEFINED_ROLES.copy()
+    elif role_list:
+        # --role frontend --role backend
+        final_role_list = list(role_list)
+
+    # Display role assignment info
+    if final_role_list and not dry_run:
+        console.print(f"[dim]Roles: {', '.join(final_role_list)} (distributed round-robin)[/dim]")
 
     # Warn about dangerous permissions in background mode
     if background and not dry_run and not yes:
@@ -2541,6 +2676,9 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
         cli_config = AGENT_CLI_CONFIG[cli_name]
         cli_command = cli_config["command"]
 
+        # Round-robin role assignment
+        agent_role = final_role_list[(i - 1) % len(final_role_list)] if final_role_list else None
+
         agent_name = f"{name_prefix}-{i}"
         work_dir = project_dir
 
@@ -2561,10 +2699,8 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
                     work_dir = worktree_path
                     console.print(f"[dim]Created worktree: {worktree_path}[/dim]")
 
-        prompt = AGENT_PROMPT_TEMPLATE.format(
-            agent_name=agent_name,
-            working_dir=work_dir,
-        )
+        # Build prompt with role-specific sections
+        prompt = _build_agent_prompt(agent_name, str(work_dir), agent_role)
 
         if background:
             # Background mode: use CLI-specific autonomous flags
@@ -2584,7 +2720,8 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
                 cmd.append(prompt)
 
             if dry_run:
-                console.print(f"\n[bold]Agent {agent_name} (background, {cli_name}):[/bold]")
+                role_part = f", role={agent_role}" if agent_role else ""
+                console.print(f"\n[bold]Agent {agent_name} (background, {cli_name}{role_part}):[/bold]")
                 console.print(f"  Directory: {work_dir}")
                 bg_args = " ".join(cli_config["background_args"])
                 model_part = f" {cli_config['model_arg']} {model}" if model else ""
@@ -2597,9 +2734,11 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
             # Spawn as background process
             try:
                 log_file = project_dir / ".aqua" / f"{agent_name}.log"
-                # Set AQUA_SESSION_ID so each agent has its own session file
+                # Set AQUA_SESSION_ID and AQUA_AGENT_ROLE so agent knows its identity
                 env = os.environ.copy()
                 env["AQUA_SESSION_ID"] = agent_name
+                if agent_role:
+                    env["AQUA_AGENT_ROLE"] = agent_role
                 with open(log_file, "w") as log:
                     process = subprocess.Popen(
                         cmd,
@@ -2615,8 +2754,10 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
                     "log": str(log_file),
                     "mode": "background",
                     "cli": cli_name,
+                    "role": agent_role,
                 })
-                console.print(f"[green]✓[/green] Spawned [cyan]{agent_name}[/cyan] (PID: {process.pid}) [dim]{cli_name}, background[/dim]")
+                role_str = f" [magenta]{agent_role}[/magenta]" if agent_role else ""
+                console.print(f"[green]✓[/green] Spawned [cyan]{agent_name}[/cyan]{role_str} (PID: {process.pid}) [dim]{cli_name}, background[/dim]")
 
             except Exception as e:
                 console.print(f"[red]Error spawning {agent_name}:[/red] {e}")
@@ -2624,7 +2765,8 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
         else:
             # Interactive mode: open new terminal with agent CLI
             if dry_run:
-                console.print(f"\n[bold]Agent {agent_name} (interactive, {cli_name}):[/bold]")
+                role_part = f", role={agent_role}" if agent_role else ""
+                console.print(f"\n[bold]Agent {agent_name} (interactive, {cli_name}{role_part}):[/bold]")
                 console.print(f"  Directory: {work_dir}")
                 model_part = f" {cli_config['model_arg']} {model}" if model else ""
                 console.print(f"  Opens new terminal with: {cli_command}{model_part} '<prompt>'")
@@ -2637,10 +2779,11 @@ def spawn(count: int, name_prefix: str, use_claude: bool, use_codex: bool, use_g
                 prompt_file = project_dir / ".aqua" / f"{agent_name}.prompt"
                 prompt_file.write_text(prompt)
 
-                # Set AQUA_SESSION_ID so each agent has its own session file
+                # Set AQUA_SESSION_ID and AQUA_AGENT_ROLE so each agent has its own session file
                 # Build CLI command with model argument (only if specified)
                 model_part = f" {cli_config['model_arg']} {model}" if model else ""
-                shell_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && {cli_command}{model_part} \"$(cat '{prompt_file}')\""
+                role_export = f" && export AQUA_AGENT_ROLE='{agent_role}'" if agent_role else ""
+                shell_cmd = f"export AQUA_SESSION_ID='{agent_name}'{role_export} && cd '{work_dir}' && {cli_command}{model_part} \"$(cat '{prompt_file}')\""
 
                 # Escape quotes for AppleScript (can't use backslash in f-string on Python 3.10)
                 escaped_cmd = shell_cmd.replace('"', '\\"')
@@ -2681,15 +2824,18 @@ end tell
                         "name": agent_name,
                         "mode": "interactive",
                         "cli": cli_name,
+                        "role": agent_role,
                     })
-                    console.print(f"[green]✓[/green] Opened {terminal_used} for [cyan]{agent_name}[/cyan] [dim]{cli_name}[/dim]")
+                    role_str = f" [magenta]{agent_role}[/magenta]" if agent_role else ""
+                    console.print(f"[green]✓[/green] Opened {terminal_used} for [cyan]{agent_name}[/cyan]{role_str} [dim]{cli_name}[/dim]")
                 except Exception as e:
                     console.print(f"[red]Error opening terminal for {agent_name}:[/red] {e}")
 
             elif sys.platform == "linux":
                 # Linux: try common terminal emulators
                 model_part = f" {cli_config['model_arg']} {model}" if model else ""
-                cli_cmd = f"export AQUA_SESSION_ID='{agent_name}' && cd '{work_dir}' && {cli_command}{model_part} '{prompt}'"
+                role_export = f" && export AQUA_AGENT_ROLE='{agent_role}'" if agent_role else ""
+                cli_cmd = f"export AQUA_SESSION_ID='{agent_name}'{role_export} && cd '{work_dir}' && {cli_command}{model_part} '{prompt}'"
                 terminals = [
                     ["gnome-terminal", "--", "bash", "-c", f"{cli_cmd}; exec bash"],
                     ["xterm", "-e", f"{cli_cmd}; bash"],
@@ -2700,8 +2846,9 @@ end tell
                     if shutil.which(term_cmd[0]):
                         try:
                             subprocess.Popen(term_cmd, start_new_session=True)
-                            spawned.append({"name": agent_name, "mode": "interactive", "cli": cli_name})
-                            console.print(f"[green]✓[/green] Opened terminal for [cyan]{agent_name}[/cyan] [dim]{cli_name}[/dim]")
+                            spawned.append({"name": agent_name, "mode": "interactive", "cli": cli_name, "role": agent_role})
+                            role_str = f" [magenta]{agent_role}[/magenta]" if agent_role else ""
+                            console.print(f"[green]✓[/green] Opened terminal for [cyan]{agent_name}[/cyan]{role_str} [dim]{cli_name}[/dim]")
                             opened = True
                             break
                         except Exception:

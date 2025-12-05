@@ -1,6 +1,6 @@
 """Coordinator logic for task management and crash recovery."""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from aqua.db import Database
 from aqua.models import Agent, AgentStatus, Task, TaskStatus
@@ -51,6 +51,36 @@ class Coordinator:
             return self.db.get_task(task.id)
 
         return None
+
+    def claim_next_task_for_role(self, agent_id: str) -> tuple[Task | None, bool]:
+        """
+        Claim the next available task, preferring tasks matching agent's role.
+
+        Returns:
+            Tuple of (task, is_role_match):
+            - task: The claimed task, or None if no tasks available
+            - is_role_match: True if task matches agent's role (or agent has no role)
+        """
+        # Get agent to check their role
+        agent = self.db.get_agent(agent_id)
+        role = agent.role if agent else None
+
+        # Get current term for fencing
+        term = self.db.get_current_term()
+
+        # Find next pending task (with role preference if applicable)
+        task, is_match = self.db.get_next_pending_task_for_role(role)
+        if not task:
+            return (None, True)  # No tasks = no mismatch
+
+        # Attempt atomic claim
+        if self.db.claim_task(task.id, agent_id, term):
+            # Update agent's current task
+            self.db.update_agent_task(agent_id, task.id)
+            # Refresh task data
+            return (self.db.get_task(task.id), is_match)
+
+        return (None, True)  # Claim failed = no mismatch to report
 
     def claim_specific_task(self, agent_id: str, task_id: str) -> Task | None:
         """
