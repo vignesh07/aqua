@@ -1,0 +1,12 @@
+<aside class="sidebar">
+  <h3>Posts</h3>
+  <ul>
+    {% for post in site.posts %}
+    <li{% if page.url == post.url %} class="active"{% endif %}>
+      <a href="{{ post.url | prepend: site.baseurl }}">{{ post.title | truncate: 50 }}</a>
+      <span class="date">{{ post.date | date: "%b %d" }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  <p><a href="{{ site.baseurl }}/">Home</a></p>
+</aside>
