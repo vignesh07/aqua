@@ -151,3 +151,7 @@ pip install --upgrade aqua-coord
 ---
 
 Roles make multi-agent coordination feel more like managing a real team. Each agent knows their specialty and self-selects appropriate work.
+
+---
+
+**Previous:** [Introducing Aqua]({{ site.baseurl }}{% post_url 2025-12-02-introducing-aqua %}) | **Next:** [Serialize: Solving the Context Window Problem]({{ site.baseurl }}{% post_url 2025-12-04-serialize-long-running-projects %}) | [All Posts]({{ site.baseurl }}/blog)

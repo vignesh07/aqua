@@ -330,3 +330,7 @@ pip install --upgrade aqua-coord
 ---
 
 The journey from "agents forget things" to "Aqua orchestrates fresh agents" took several wrong turns. But the final design is simpler and more robust than any of the hook-based approaches. Sometimes the right abstraction isn't making the thing work better—it's changing what the thing is.
+
+---
+
+**Previous:** [Agent Roles: Spawn Specialized Teams That Self-Organize]({{ site.baseurl }}{% post_url 2025-12-03-agent-roles %}) | [All Posts]({{ site.baseurl }}/blog)

@@ -105,6 +105,16 @@ The agent reads the instructions from CLAUDE.md (or AGENTS.md/GEMINI.md), unders
 
 Aqua auto-detects which CLI is available when using `aqua spawn`. Each CLI uses its own default model - override with `--model` if needed.
 
+## Blog
+
+Technical deep-dives and development notes:
+
+- **[Serialize: Solving the Context Window Problem]({{ site.baseurl }}{% post_url 2025-12-04-serialize-long-running-projects %})** - Dec 4, 2025
+- **[Agent Roles: Teaching Your Multi-Agent System Specialization]({{ site.baseurl }}{% post_url 2025-12-03-agent-roles %})** - Dec 3, 2025
+- **[Introducing Aqua]({{ site.baseurl }}{% post_url 2025-12-02-introducing-aqua %})** - Dec 2, 2025
+
+[View all posts]({{ site.baseurl }}/blog)
+
 ## Links
 
 - [GitHub Repository](https://github.com/vignesh07/aqua)

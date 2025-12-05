@@ -157,3 +157,7 @@ If you've used or even seen the gifs where aqua is in action, you'd have noticed
 ---
 
 Aqua is open source under the MIT license.
+
+---
+
+**Next:** [Agent Roles: Spawn Specialized Teams That Self-Organize]({{ site.baseurl }}{% post_url 2025-12-03-agent-roles %}) | [All Posts]({{ site.baseurl }}/blog)
