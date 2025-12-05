@@ -6,50 +6,46 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
     {% seo %}
-    <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@1/css/pico.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css">
+    <link rel="stylesheet" href="{{ '/assets/css/style.css?v=' | append: site.github.build_revision | relative_url }}">
     <style>
-      :root {
-        --spacing: 1rem;
-      }
-      body {
-        margin: 0;
-        padding: 0;
-      }
-      .site-container {
+      .wrapper {
         display: flex;
-        max-width: 1200px;
+        gap: 3rem;
+        max-width: 1012px;
         margin: 0 auto;
         padding: 2rem 1rem;
-        gap: 2rem;
       }
       .sidebar {
-        width: 220px;
+        width: 200px;
         flex-shrink: 0;
       }
-      .sidebar h1 {
-        font-size: 1.5rem;
-        margin: 0 0 0.5rem 0;
+      .sidebar .site-title {
+        font-size: 1.25rem;
+        font-weight: bold;
+        margin-bottom: 0.25rem;
       }
-      .sidebar h1 a {
+      .sidebar .site-title a {
+        color: #333;
         text-decoration: none;
-        color: inherit;
       }
-      .sidebar .description {
-        font-size: 0.9rem;
-        color: #586069;
+      .sidebar .site-description {
+        font-size: 0.875rem;
+        color: #666;
         margin-bottom: 1rem;
       }
       .sidebar .github-link {
-        display: inline-block;
+        font-size: 0.875rem;
         margin-bottom: 1.5rem;
-        font-size: 0.9rem;
+        display: block;
+      }
+      .sidebar nav {
+        border-top: 1px solid #eaecef;
+        padding-top: 1rem;
       }
       .sidebar nav h4 {
-        font-size: 0.9rem;
-        margin: 0 0 0.5rem 0;
-        padding-bottom: 0.5rem;
-        border-bottom: 1px solid #e1e4e8;
+        font-size: 0.875rem;
+        font-weight: 600;
+        margin: 0 0 0.75rem 0;
       }
       .sidebar nav ul {
         list-style: none;
@@ -60,9 +56,9 @@
         margin-bottom: 0.75rem;
       }
       .sidebar nav li a {
-        font-size: 0.85rem;
-        text-decoration: none;
+        font-size: 0.8125rem;
         color: #0366d6;
+        text-decoration: none;
       }
       .sidebar nav li a:hover {
         text-decoration: underline;
@@ -79,18 +75,11 @@
       .main-content {
         flex: 1;
         min-width: 0;
-        max-width: 900px;
       }
-      .markdown-body {
-        font-size: 16px;
-      }
-      .markdown-body h1:first-child {
-        margin-top: 0;
-        padding-top: 0;
-      }
-      @media (max-width: 768px) {
-        .site-container {
+      @media (max-width: 700px) {
+        .wrapper {
           flex-direction: column;
+          gap: 1.5rem;
         }
         .sidebar {
           width: 100%;
@@ -99,12 +88,14 @@
     </style>
   </head>
   <body>
-    <div class="site-container">
+    <div class="wrapper">
       <aside class="sidebar">
-        <h1><a href="{{ '/' | relative_url }}">{{ site.title | default: site.github.repository_name }}</a></h1>
+        <div class="site-title">
+          <a href="{{ '/' | relative_url }}">{{ site.title | default: site.github.repository_name }}</a>
+        </div>
 
         {% if site.description or site.github.project_tagline %}
-        <p class="description">{{ site.description | default: site.github.project_tagline }}</p>
+        <p class="site-description">{{ site.description | default: site.github.project_tagline }}</p>
         {% endif %}
 
         <a class="github-link" href="https://github.com/vignesh07/aqua">View on GitHub →</a>
@@ -115,7 +106,7 @@
           <ul>
             {% for post in site.posts %}
             <li{% if page.url == post.url %} class="active"{% endif %}>
-              <a href="{{ post.url | prepend: site.baseurl }}">{{ post.title | split: ':' | first | truncate: 40 }}</a>
+              <a href="{{ post.url | prepend: site.baseurl }}">{{ post.title | split: ':' | first | truncate: 35 }}</a>
               <span class="date">{{ post.date | date: "%b %d, %Y" }}</span>
             </li>
             {% endfor %}
