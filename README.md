@@ -271,6 +271,7 @@ The agent reads the instructions from CLAUDE.md (or AGENTS.md/GEMINI.md), unders
 | `aqua claim [task_id]` | Claim next pending task (or specific task) |
 | `aqua done [--summary]` | Mark current task complete |
 | `aqua fail --reason` | Mark current task as failed |
+| `aqua fail --all --reason` | Fail all pending/claimed tasks (with confirmation) |
 | `aqua progress <msg>` | Report progress (saves state for refresh) |
 
 **Options for `aqua add`:**

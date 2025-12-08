@@ -1081,10 +1081,12 @@ Mark a task as failed.
 
 ```bash
 aqua fail [task_id] --reason TEXT
+aqua fail --all --reason TEXT [-y]  # Fail all pending/claimed tasks
 
 Examples:
   aqua fail --reason "Blocked by missing API keys"
   aqua fail a1b2c3d4 --reason "Tests failing, needs investigation"
+  aqua fail --all --reason "Cancelling project" -y  # Skip confirmation
 ```
 
 #### `aqua progress`

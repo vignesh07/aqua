@@ -72,6 +72,7 @@ aqua claim [TASK_ID]          # Claim next pending task (or specific task)
 aqua show [TASK_ID]           # Show task details
 aqua done [--summary TEXT]    # Mark current task complete
 aqua fail --reason TEXT       # Mark current task as failed
+aqua fail --all --reason TEXT # Fail all pending/claimed tasks
 aqua progress "message"       # Report progress on current task
 ```
 
