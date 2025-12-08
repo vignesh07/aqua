@@ -1023,9 +1023,11 @@ def done(task_id: str, summary: str, as_json: bool):
 @main.command()
 @click.argument("task_id", required=False)
 @click.option("-r", "--reason", required=True, help="Failure reason")
+@click.option("--all", "fail_all", is_flag=True, help="Fail all pending and claimed tasks")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompt")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @require_init
-def fail(task_id: str, reason: str, as_json: bool):
+def fail(task_id: str, reason: str, fail_all: bool, yes: bool, as_json: bool):
     """Mark a task as failed."""
     project_dir = get_project_dir()
     db = get_db(project_dir)
@@ -1039,6 +1041,42 @@ def fail(task_id: str, reason: str, as_json: bool):
         db.update_heartbeat(agent_id)
 
         coordinator = Coordinator(db)
+
+        if fail_all:
+            # Get all pending and claimed tasks
+            pending_tasks = db.get_all_tasks(status=TaskStatus.PENDING)
+            claimed_tasks = db.get_all_tasks(status=TaskStatus.CLAIMED)
+            all_tasks = pending_tasks + claimed_tasks
+
+            if not all_tasks:
+                if as_json:
+                    output_json({"success": True, "failed_count": 0})
+                else:
+                    console.print("[yellow]No pending or claimed tasks to fail.[/yellow]")
+                return
+
+            if not yes and not as_json:
+                console.print(f"[yellow]This will fail {len(all_tasks)} task(s):[/yellow]")
+                for t in all_tasks[:10]:
+                    console.print(f"  • {t.id[:8]}... {t.title}")
+                if len(all_tasks) > 10:
+                    console.print(f"  ... and {len(all_tasks) - 10} more")
+                console.print()
+                if not click.confirm("Are you sure you want to fail all these tasks?", default=False):
+                    console.print("[yellow]Aborted.[/yellow]")
+                    sys.exit(0)
+
+            failed_count = 0
+            for t in all_tasks:
+                if db.fail_task(t.id, agent_id, reason):
+                    failed_count += 1
+
+            if as_json:
+                output_json({"success": True, "failed_count": failed_count})
+            else:
+                console.print(f"[yellow]Marked {failed_count} task(s) as failed.[/yellow]")
+            return
+
         if coordinator.fail_task(agent_id, task_id, reason):
             if as_json:
                 output_json({"success": True, "task_id": task_id})
