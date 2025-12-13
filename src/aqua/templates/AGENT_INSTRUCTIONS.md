@@ -30,7 +30,39 @@ aqua done            # Mark your task complete
 aqua fail --reason   # If you can't complete it
 aqua msg "text"      # Send message to all agents
 aqua inbox --unread  # Check for messages
+aqua inform "query"  # Ask about project context (what you need to know)
 ```
+
+## Observer/Informer: Project Knowledge System
+
+Aqua includes a continuous learning system that watches all agent activity and maintains project knowledge across sessions.
+
+### Ask for Context Before Starting Work
+
+When starting a new task, ask the Informer what you need to know:
+
+```bash
+aqua inform "I'm working on the auth module, what should I know?"
+aqua inform "What patterns should I follow for adding commands?"
+aqua inform "What has failed recently?"
+```
+
+The Informer reads the Observer's accumulated knowledge and provides relevant context.
+
+### Starting the Observer (Optional)
+
+The Observer runs in the background and learns from all agent activity:
+
+```bash
+# Start observer in background (typically done by the leader)
+aqua observe &
+```
+
+The Observer:
+- Watches all events, task completions, and progress messages
+- Tracks git changes
+- Continuously rewrites `.aqua/summary.md` with current project knowledge
+- Never fills up (constantly compacts its own context)
 
 ## Spawning Agents (Important!)
 

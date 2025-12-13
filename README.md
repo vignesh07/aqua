@@ -34,6 +34,29 @@ Aqua solves this by providing:
 - **Zero External Dependencies**: Uses SQLite - no Redis, Docker, or external services
 - **JSON Mode**: Full `--json` support and `AQUA_JSON=1` env var for programmatic access
 - **Agent Roles**: Assign specializations (frontend, backend, reviewer) so agents self-select appropriate tasks
+- **Observer/Informer**: Continuous learning system that maintains project knowledge across sessions
+
+## Observer/Informer System
+
+Aqua includes a knowledge persistence system that learns from agent activity:
+
+```bash
+# Start the Observer in background (watches all activity)
+aqua observe &
+
+# Ask the Informer about project context before starting work
+aqua inform "What should I know about the auth module?"
+aqua inform "What patterns should I follow for new commands?"
+aqua inform "What failed recently?"
+```
+
+The **Observer** runs in the background and:
+- Watches all events, task completions, and progress messages
+- Tracks git changes
+- Continuously rewrites `.aqua/summary.md` with current project knowledge
+- Never fills up (constantly compacts its own context)
+
+The **Informer** answers questions by reading the Observer's accumulated knowledge.
 
 ## Agent Roles
 
@@ -339,6 +362,14 @@ aqua inbox --unread
 aqua ask "Should I use Redis or SQLite?" --to @leader --timeout 60
 # Other agent replies with:
 aqua reply 42 "Use SQLite, it's simpler"
+```
+
+### Observer/Informer (Knowledge Persistence)
+
+```bash
+aqua observe                  # Start Observer (run in background with &)
+aqua observe -i 30            # Custom interval (default: 60 seconds)
+aqua inform "question"        # Ask Informer about project context
 ```
 
 ### Monitoring & Recovery

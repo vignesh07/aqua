@@ -3527,6 +3527,251 @@ def ps(as_json: bool):
         db.close()
 
 
+# =============================================================================
+# Observer/Informer System - Continuous Learning
+# =============================================================================
+
+@main.command()
+@click.option("--interval", "-i", default=60, help="Seconds between summary updates (default: 60)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def observe(interval: int, as_json: bool):
+    """Start the Observer agent - watches and learns continuously.
+
+    The Observer monitors all activity (events, task completions, progress messages)
+    and maintains a living summary in .aqua/summary.md.
+
+    It continuously rewrites this summary as new information comes in,
+    learning what's important vs noise over time.
+
+    Run this in the background to enable persistent project knowledge:
+
+        aqua observe &
+
+    Workers can then query this knowledge via 'aqua inform'.
+    """
+    import subprocess
+    import time
+
+    project_dir = get_project_dir()
+    aqua_dir = find_aqua_dir()
+    db = get_db(project_dir)
+    as_json = should_output_json(as_json)
+
+    summary_file = aqua_dir / "summary.md"
+    last_event_id = 0
+
+    # Track what we've processed
+    state_file = aqua_dir / "observer_state.json"
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text())
+            last_event_id = state.get("last_event_id", 0)
+        except Exception:
+            pass
+
+    if not as_json:
+        console.print("[cyan]Observer started.[/cyan] Watching for activity...")
+        console.print(f"[dim]Summary file: {summary_file}[/dim]")
+        console.print(f"[dim]Update interval: {interval}s[/dim]")
+        console.print("[dim]Press Ctrl+C to stop.[/dim]")
+
+    try:
+        while True:
+            try:
+                # Get new events since last check
+                new_events = db.conn.execute(
+                    """SELECT * FROM events WHERE id > ? ORDER BY id ASC LIMIT 100""",
+                    (last_event_id,)
+                ).fetchall()
+
+                # Get recent task completions
+                recent_tasks = db.conn.execute(
+                    """SELECT * FROM tasks
+                       WHERE status IN ('done', 'failed')
+                       AND updated_at > datetime('now', '-1 hour')
+                       ORDER BY updated_at DESC LIMIT 20"""
+                ).fetchall()
+
+                # Get recent progress messages
+                recent_progress = db.conn.execute(
+                    """SELECT a.name, a.last_progress, t.title
+                       FROM agents a
+                       LEFT JOIN tasks t ON a.current_task_id = t.id
+                       WHERE a.last_progress IS NOT NULL"""
+                ).fetchall()
+
+                # Get git diff summary (recent changes)
+                git_summary = ""
+                try:
+                    result = subprocess.run(
+                        ["git", "diff", "--stat", "HEAD~5", "HEAD"],
+                        capture_output=True, text=True, cwd=project_dir, timeout=5
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        git_summary = result.stdout.strip()
+                except Exception:
+                    pass
+
+                # Only update if we have new information
+                if new_events or not summary_file.exists():
+                    # Build context for summary update
+                    current_summary = ""
+                    if summary_file.exists():
+                        current_summary = summary_file.read_text()
+
+                    # Format new events
+                    events_text = ""
+                    for evt in new_events:
+                        evt_dict = dict(evt)
+                        events_text += f"- [{evt_dict['event_type']}] {evt_dict.get('details', '')}\n"
+                        last_event_id = max(last_event_id, evt_dict['id'])
+
+                    # Format task completions
+                    tasks_text = ""
+                    for task in recent_tasks:
+                        task_dict = dict(task)
+                        status = "✓" if task_dict['status'] == 'done' else "✗"
+                        tasks_text += f"- {status} {task_dict['title']}"
+                        if task_dict.get('error'):
+                            tasks_text += f" (error: {task_dict['error'][:100]})"
+                        if task_dict.get('result'):
+                            tasks_text += f" -> {task_dict['result'][:100]}"
+                        tasks_text += "\n"
+
+                    # Format progress
+                    progress_text = ""
+                    for prog in recent_progress:
+                        prog_dict = dict(prog)
+                        progress_text += f"- {prog_dict['name']}: {prog_dict['last_progress']}\n"
+
+                    # Build new summary (simple aggregation for MVP)
+                    # In future: use LLM to intelligently summarize
+                    new_summary = f"""# Project Summary (Auto-generated by Observer)
+
+*Last updated: {_utc_now_naive().isoformat()}*
+
+## Recent Activity
+
+### Task Completions
+{tasks_text if tasks_text else "*No recent completions*"}
+
+### Agent Progress
+{progress_text if progress_text else "*No active work*"}
+
+### Recent Events
+{events_text if events_text else "*No new events*"}
+
+## Git Changes (Last 5 Commits)
+```
+{git_summary if git_summary else "No recent changes"}
+```
+
+---
+*This summary is continuously updated by the Observer agent.*
+*Workers can query it via: aqua inform "your question"*
+"""
+
+                    # Write summary
+                    summary_file.write_text(new_summary)
+
+                    # Save state
+                    state_file.write_text(json.dumps({"last_event_id": last_event_id}))
+
+                    if not as_json:
+                        console.print(f"[dim]{_utc_now_naive().strftime('%H:%M:%S')} - Summary updated ({len(new_events)} new events)[/dim]")
+
+                time.sleep(interval)
+
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                if not as_json:
+                    console.print(f"[yellow]Observer error: {e}[/yellow]")
+                time.sleep(interval)
+
+    except KeyboardInterrupt:
+        if not as_json:
+            console.print("\n[cyan]Observer stopped.[/cyan]")
+    finally:
+        db.close()
+
+
+@main.command()
+@click.argument("question")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@require_init
+def inform(question: str, as_json: bool):
+    """Ask the Informer about project context.
+
+    The Informer reads the Observer's summary and answers questions
+    about what you need to know for your current task.
+
+    Examples:
+
+        aqua inform "What should I know about the auth module?"
+        aqua inform "What patterns should I follow for new commands?"
+        aqua inform "What failed recently?"
+
+    Note: For best results, run 'aqua observe' in the background first
+    to build up project knowledge.
+    """
+    project_dir = get_project_dir()
+    aqua_dir = find_aqua_dir()
+    db = get_db(project_dir)
+    as_json = should_output_json(as_json)
+
+    summary_file = aqua_dir / "summary.md"
+
+    try:
+        if not summary_file.exists():
+            if as_json:
+                output_json({
+                    "error": "no_summary",
+                    "message": "No project summary found. Run 'aqua observe' first to build project knowledge.",
+                    "hint": "Start observer with: aqua observe &"
+                })
+            else:
+                console.print("[yellow]No project summary found.[/yellow]")
+                console.print("[dim]Run 'aqua observe &' first to start building project knowledge.[/dim]")
+            return
+
+        summary = summary_file.read_text()
+
+        # Get current agent's task for context
+        agent_id = get_stored_agent_id()
+        current_task = None
+        if agent_id:
+            agent = db.get_agent(agent_id)
+            if agent and agent.current_task_id:
+                current_task = db.get_task(agent.current_task_id)
+
+        # For MVP: return the summary with the question echoed
+        # Future: Use LLM to intelligently answer based on summary + question
+
+        if as_json:
+            output_json({
+                "question": question,
+                "summary": summary,
+                "current_task": current_task.title if current_task else None,
+                "hint": "Review the summary above for relevant context."
+            })
+        else:
+            console.print(Panel(
+                f"[cyan]Question:[/cyan] {question}\n\n"
+                f"[cyan]Current Task:[/cyan] {current_task.title if current_task else 'None'}\n\n"
+                "[dim]---[/dim]\n\n"
+                f"{summary}",
+                title="[bold]Project Context[/bold]",
+                border_style="cyan"
+            ))
+            console.print("\n[dim]Tip: The summary above contains the Observer's knowledge about this project.[/dim]")
+            console.print("[dim]In future versions, an LLM will directly answer your question.[/dim]")
+
+    finally:
+        db.close()
+
+
 @main.command()
 @click.argument("name", required=False)
 @click.option("--all", "kill_all", is_flag=True, help="Kill all agents")
