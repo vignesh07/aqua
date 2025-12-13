@@ -1,8 +1,10 @@
 """Command-line interface for Aqua."""
 
+import atexit
 import functools
 import json
 import os
+import signal
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +42,97 @@ AQUA_AGENT_ID_VAR = "AQUA_AGENT_ID"
 
 # Special tag for checkpoint tasks (used by serialize command)
 CHECKPOINT_TAG = "__checkpoint__"
+
+# Global state for graceful shutdown
+_shutdown_registered = False
+_original_sigterm = None
+_original_sigint = None
+
+
+def _graceful_shutdown_handler(signum, frame):
+    """Handle shutdown signals by cleaning up agent state.
+
+    This releases file locks and abandons the current task before exiting,
+    preventing stuck tasks when agents are killed.
+    """
+    try:
+        project_dir = get_project_dir()
+        aqua_dir = project_dir / ".aqua"
+        if not aqua_dir.exists():
+            sys.exit(0)
+
+        agent_id = get_stored_agent_id()
+        if not agent_id:
+            sys.exit(0)
+
+        db = get_db(project_dir)
+        try:
+            agent = db.get_agent(agent_id)
+            if agent:
+                # Abandon current task
+                if agent.current_task_id:
+                    db.abandon_task(agent.current_task_id, reason=f"Agent {agent.name} killed (signal {signum})")
+
+                # Release file locks
+                db.release_agent_locks(agent_id)
+
+                # Mark agent as dead (not just delete - preserves history)
+                db.update_agent_status(agent_id, AgentStatus.DEAD)
+
+                db.log_event(
+                    "agent_shutdown",
+                    agent_id=agent_id,
+                    details={"signal": signum, "reason": "graceful_shutdown"}
+                )
+        finally:
+            db.close()
+    except Exception:
+        pass  # Best effort cleanup, don't fail
+
+    sys.exit(0)
+
+
+def register_shutdown_handlers():
+    """Register signal handlers for graceful shutdown.
+
+    Called when an agent joins to ensure cleanup on SIGTERM/SIGINT.
+    """
+    global _shutdown_registered, _original_sigterm, _original_sigint
+
+    if _shutdown_registered:
+        return
+
+    _original_sigterm = signal.signal(signal.SIGTERM, _graceful_shutdown_handler)
+    _original_sigint = signal.signal(signal.SIGINT, _graceful_shutdown_handler)
+    atexit.register(_graceful_shutdown_cleanup)
+    _shutdown_registered = True
+
+
+def _graceful_shutdown_cleanup():
+    """atexit handler for cleanup."""
+    # Note: atexit doesn't receive signal info, so we do best-effort cleanup
+    try:
+        project_dir = get_project_dir()
+        aqua_dir = project_dir / ".aqua"
+        if not aqua_dir.exists():
+            return
+
+        agent_id = get_stored_agent_id()
+        if not agent_id:
+            return
+
+        db = get_db(project_dir)
+        try:
+            agent = db.get_agent(agent_id)
+            if agent and agent.status == AgentStatus.ACTIVE:
+                # Only cleanup if still active (not already cleaned by signal handler)
+                if agent.current_task_id:
+                    db.abandon_task(agent.current_task_id, reason=f"Agent {agent.name} exited")
+                db.release_agent_locks(agent_id)
+        finally:
+            db.close()
+    except Exception:
+        pass  # Best effort
 
 
 def get_project_dir() -> Path:
@@ -787,6 +880,9 @@ def join(name: str, agent_type: str, role: str, cap: tuple, as_json: bool):
         db.create_agent(agent)
         store_agent_id(agent.id)
 
+        # Register signal handlers for graceful shutdown
+        register_shutdown_handlers()
+
         # Try to become leader
         is_leader, term = db.try_become_leader(agent.id)
 
@@ -846,13 +942,19 @@ def leave(force: bool, as_json: bool):
         if agent.current_task_id:
             db.abandon_task(agent.current_task_id, reason=f"Agent {agent.name} left")
 
+        # Release any file locks held by this agent
+        locks_released = db.release_agent_locks(agent_id)
+
         db.delete_agent(agent_id)
         clear_agent_id()
 
         if as_json:
-            output_json({"status": "left", "name": agent.name, "id": agent.id})
+            output_json({"status": "left", "name": agent.name, "id": agent.id, "locks_released": locks_released})
         else:
-            console.print(f"[green]✓[/green] Left the quorum (was {agent.name})")
+            msg = f"[green]✓[/green] Left the quorum (was {agent.name})"
+            if locks_released > 0:
+                msg += f" [dim](released {locks_released} lock(s))[/dim]"
+            console.print(msg)
 
     finally:
         db.close()

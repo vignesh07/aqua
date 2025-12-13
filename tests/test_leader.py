@@ -1,7 +1,7 @@
 """Tests for leader election."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import threading
 import time
 
@@ -117,7 +117,7 @@ class TestLeaderElection:
         assert leader is not None
         assert leader.agent_id == agent.id
         assert leader.term == 1
-        assert leader.lease_expires_at > datetime.utcnow()
+        assert leader.lease_expires_at > datetime.now(UTC).replace(tzinfo=None)
 
     def test_leader_is_expired(self, db: Database):
         """Test checking if leader lease is expired."""

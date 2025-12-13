@@ -562,7 +562,11 @@ class Database:
     def claim_task(
         self, task_id: str, agent_id: str, term: int
     ) -> bool:
-        """Atomically claim a task. Returns True if successful."""
+        """Atomically claim a task. Returns True if successful.
+
+        Note: This only updates the task. Use claim_task_atomic() to also
+        update the agent's current_task_id in a single transaction.
+        """
         now = _utc_now_naive().isoformat()
         cursor = self.conn.execute(
             """
@@ -577,6 +581,44 @@ class Database:
             self.log_event("task_claimed", agent_id=agent_id, task_id=task_id)
             return True
         return False
+
+    def claim_task_atomic(
+        self, task_id: str, agent_id: str, term: int
+    ) -> bool:
+        """Atomically claim a task AND update the agent's current task.
+
+        This wraps both operations in a single transaction to prevent
+        orphaned claims if a crash occurs between the two updates.
+
+        Returns True if successful, False if task was already claimed.
+        """
+        now = _utc_now_naive().isoformat()
+
+        with self.transaction() as conn:
+            # Claim the task
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET status = 'claimed', claimed_by = ?, claimed_at = ?,
+                    claim_term = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (agent_id, now, term, now, task_id)
+            )
+
+            if cursor.rowcount != 1:
+                # Task was already claimed or doesn't exist
+                return False
+
+            # Update agent's current task
+            conn.execute(
+                "UPDATE agents SET current_task_id = ? WHERE id = ?",
+                (task_id, agent_id)
+            )
+
+        # Log event outside transaction (non-critical)
+        self.log_event("task_claimed", agent_id=agent_id, task_id=task_id)
+        return True
 
     def complete_task(
         self, task_id: str, agent_id: str, result: str | None = None

@@ -1,7 +1,7 @@
 """Tests for coordinator and crash recovery."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 from aqua.db import Database
 from aqua.coordinator import Coordinator
@@ -187,7 +187,7 @@ class TestCrashRecovery:
         db.claim_task(task.id, agent.id, term=1)
 
         # Simulate stale heartbeat
-        stale_time = (datetime.utcnow() - timedelta(seconds=120)).isoformat()
+        stale_time = (datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=120)).isoformat()
         db.conn.execute(
             "UPDATE agents SET last_heartbeat_at = ? WHERE id = ?",
             (stale_time, agent.id)
@@ -230,7 +230,7 @@ class TestCrashRecovery:
         db.claim_task(task.id, agent.id, term=1)
 
         # Simulate old claim time
-        old_time = (datetime.utcnow() - timedelta(minutes=60)).isoformat()
+        old_time = (datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=60)).isoformat()
         db.conn.execute(
             "UPDATE tasks SET claimed_at = ? WHERE id = ?",
             (old_time, task.id)

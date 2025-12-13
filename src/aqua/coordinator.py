@@ -43,10 +43,8 @@ class Coordinator:
         if not task:
             return None
 
-        # Attempt atomic claim
-        if self.db.claim_task(task.id, agent_id, term):
-            # Update agent's current task
-            self.db.update_agent_task(agent_id, task.id)
+        # Attempt atomic claim (task + agent update in single transaction)
+        if self.db.claim_task_atomic(task.id, agent_id, term):
             # Refresh task data
             return self.db.get_task(task.id)
 
@@ -73,10 +71,8 @@ class Coordinator:
         if not task:
             return (None, True)  # No tasks = no mismatch
 
-        # Attempt atomic claim
-        if self.db.claim_task(task.id, agent_id, term):
-            # Update agent's current task
-            self.db.update_agent_task(agent_id, task.id)
+        # Attempt atomic claim (task + agent update in single transaction)
+        if self.db.claim_task_atomic(task.id, agent_id, term):
             # Refresh task data
             return (self.db.get_task(task.id), is_match)
 
@@ -89,8 +85,8 @@ class Coordinator:
         """
         term = self.db.get_current_term()
 
-        if self.db.claim_task(task_id, agent_id, term):
-            self.db.update_agent_task(agent_id, task_id)
+        # Attempt atomic claim (task + agent update in single transaction)
+        if self.db.claim_task_atomic(task_id, agent_id, term):
             return self.db.get_task(task_id)
 
         return None
