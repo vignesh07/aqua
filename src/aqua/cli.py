@@ -337,6 +337,7 @@ def init(force: bool):
 @require_init
 def status(as_json: bool):
     """Show current Aqua status."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -471,6 +472,7 @@ def add(title: str, description: str, priority: int, tag: tuple, context: str,
         aqua add "Write tests" --depends-on abc123
         aqua add "Write docs" --after "Build API"
     """
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -564,6 +566,7 @@ def serialize(every: int, dry_run: bool, as_json: bool):
         aqua serialize --every 2        # Checkpoint every 2 tasks
         aqua serialize --dry-run        # Preview without making changes
     """
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -699,6 +702,7 @@ def serialize(every: int, dry_run: bool, as_json: bool):
 @require_init
 def list_tasks(status_filter: str, tag: str, as_json: bool):
     """List tasks."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -757,6 +761,7 @@ def list_tasks(status_filter: str, tag: str, as_json: bool):
 @require_init
 def show(task_id: str, as_json: bool):
     """Show task details."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -825,6 +830,7 @@ def show(task_id: str, as_json: bool):
 @require_init
 def join(name: str, agent_type: str, role: str, cap: tuple, as_json: bool):
     """Register as an agent in the quorum."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -966,6 +972,7 @@ def leave(force: bool, as_json: bool):
 @require_init
 def claim(task_id: str, as_json: bool):
     """Claim a task."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -988,7 +995,7 @@ def claim(task_id: str, as_json: bool):
         coordinator = Coordinator(db)
         recovery = coordinator.run_recovery()
         if recovery["dead_agents"] or recovery["stale_tasks"]:
-            if not should_output_json(as_json):
+            if not as_json:
                 if recovery["dead_agents"]:
                     console.print(f"[dim]Recovered {len(recovery['dead_agents'])} dead agent(s)[/dim]")
                 if recovery["stale_tasks"]:
@@ -1093,6 +1100,7 @@ def claim(task_id: str, as_json: bool):
 @require_init
 def done(task_id: str, summary: str, as_json: bool):
     """Mark a task as complete."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -1131,6 +1139,7 @@ def done(task_id: str, summary: str, as_json: bool):
 @require_init
 def fail(task_id: str, reason: str, fail_all: bool, yes: bool, as_json: bool):
     """Mark a task as failed."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -1256,6 +1265,7 @@ def refresh(as_json: bool):
     Run this FIRST at the start of every session or after context
     compaction. It tells you who you are and what you were doing.
     """
+    as_json = should_output_json(as_json)
     # Check if Aqua is initialized - don't use @require_init so we can give a helpful message
     if not find_aqua_dir():
         if as_json:
@@ -1474,6 +1484,7 @@ def refresh(as_json: bool):
 @require_init
 def msg(message: str, to_agent: str, as_json: bool):
     """Send a message."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -1524,6 +1535,7 @@ def msg(message: str, to_agent: str, as_json: bool):
 @require_init
 def inbox(unread: bool, as_json: bool):
     """Read messages."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -1583,6 +1595,7 @@ def ask(question: str, to_agent: str, timeout: int, poll: int, as_json: bool):
     """
     import time
 
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -1672,6 +1685,7 @@ def reply(message_id: int, response: str, as_json: bool):
         aqua reply 42 "Use SQLite, it's simpler"
         aqua inbox --unread  # See pending questions first
     """
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -1724,6 +1738,7 @@ def lock(file_path: str, as_json: bool):
     Example:
         aqua lock src/handlers.py
     """
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -1783,6 +1798,7 @@ def unlock(file_path: str, as_json: bool):
     Example:
         aqua unlock src/handlers.py
     """
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -1827,6 +1843,7 @@ def unlock(file_path: str, as_json: bool):
 @require_init
 def locks(as_json: bool):
     """List all file locks."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -2160,6 +2177,7 @@ def recover(as_json: bool):
 @require_init
 def log(agent: str, task_id: str, limit: int, as_json: bool):
     """View event log."""
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
     db = get_db(project_dir)
 
@@ -2220,6 +2238,7 @@ def logs(agent: str, task_id: str, refresh: int, as_json: bool):
     """
     import time
 
+    as_json = should_output_json(as_json)
     project_dir = get_project_dir()
 
     last_event_id = 0

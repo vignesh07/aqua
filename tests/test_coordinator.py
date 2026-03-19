@@ -1,4 +1,10 @@
-"""Tests for coordinator and crash recovery."""
+"""Tests for the Coordinator module: task claiming, completion, failure, and crash recovery.
+
+The Coordinator is the central orchestration layer that manages task lifecycle
+(claim → complete/fail) and crash recovery (dead agent detection, stale task
+recovery, abandoned task requeuing). These tests use an in-memory SQLite database
+provided by the ``db`` fixture.
+"""
 
 import pytest
 from datetime import datetime, timedelta, UTC
@@ -10,10 +16,18 @@ from aqua.utils import generate_short_id
 
 
 class TestTaskClaiming:
-    """Tests for task claiming logic."""
+    """Tests for the task claiming workflow.
+
+    Covers:
+        - Claiming the next available task from the queue.
+        - Priority ordering (higher priority claimed first).
+        - Claiming a specific task by ID.
+        - Returning ``None`` when no tasks are available.
+        - Side-effect of updating the agent's ``current_task_id``.
+    """
 
     def test_claim_next_task(self, db: Database):
-        """Test claiming next available task."""
+        """Claiming a pending task should mark it as CLAIMED and assign the agent."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -29,7 +43,7 @@ class TestTaskClaiming:
         assert claimed.claimed_by == agent.id
 
     def test_claim_respects_priority(self, db: Database):
-        """Test that higher priority tasks are claimed first."""
+        """When multiple pending tasks exist, the highest-priority task is claimed first."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -45,7 +59,7 @@ class TestTaskClaiming:
         assert claimed.title == "High priority"
 
     def test_claim_specific_task(self, db: Database):
-        """Test claiming a specific task by ID."""
+        """An agent can claim a specific task by ID, bypassing priority ordering."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -61,7 +75,7 @@ class TestTaskClaiming:
         assert claimed.id == task2.id
 
     def test_claim_no_tasks_available(self, db: Database):
-        """Test claiming when no tasks are available."""
+        """Claiming returns ``None`` when the task queue is empty."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -71,7 +85,7 @@ class TestTaskClaiming:
         assert claimed is None
 
     def test_claim_updates_agent_current_task(self, db: Database):
-        """Test that claiming updates the agent's current task."""
+        """Claiming a task sets the agent's ``current_task_id`` to the claimed task."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -86,10 +100,16 @@ class TestTaskClaiming:
 
 
 class TestTaskCompletion:
-    """Tests for task completion logic."""
+    """Tests for the task completion workflow.
+
+    Covers:
+        - Completing a task with a result string.
+        - Completing the agent's current task without specifying a task ID.
+        - Side-effect of clearing the agent's ``current_task_id``.
+    """
 
     def test_complete_task(self, db: Database):
-        """Test completing a task."""
+        """Completing a claimed task sets status to DONE and stores the result."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -107,7 +127,7 @@ class TestTaskCompletion:
         assert completed_task.result == "Finished!"
 
     def test_complete_current_task(self, db: Database):
-        """Test completing current task without specifying ID."""
+        """Omitting ``task_id`` completes the agent's current task."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -122,7 +142,7 @@ class TestTaskCompletion:
         assert success is True
 
     def test_complete_clears_agent_current_task(self, db: Database):
-        """Test that completing clears the agent's current task."""
+        """After completion, the agent's ``current_task_id`` is reset to ``None``."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -138,10 +158,15 @@ class TestTaskCompletion:
 
 
 class TestTaskFailure:
-    """Tests for task failure logic."""
+    """Tests for the task failure workflow.
+
+    Covers:
+        - Failing a task with an error message.
+        - Incrementing the ``retry_count`` on failure.
+    """
 
     def test_fail_task(self, db: Database):
-        """Test failing a task."""
+        """Failing a claimed task sets status to FAILED and stores the error message."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
@@ -159,7 +184,7 @@ class TestTaskFailure:
         assert failed_task.error == "Something broke"
 
     def test_fail_increments_retry_count(self, db: Database):
-        """Test that failing increments retry count."""
+        """Each failure increments the task's ``retry_count``."""
         agent = Agent(id=generate_short_id(), name="agent-1")
         db.create_agent(agent)
 
