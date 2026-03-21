@@ -519,7 +519,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Not accepting contributions at the moment.
+Not accepting contributions at the moment. Create issues if you need anything.
 
 ---
 
